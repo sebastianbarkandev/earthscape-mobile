@@ -1,0 +1,16 @@
+{
+  "cli": { "appVersionSource": "remote" },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "staging": {
+      "distribution": "internal",
+      "env": { "EXPO_PUBLIC_API_URL": "https://REPLACE-staging-org.earthscape.com" }
+    },
+    "production": {
+      "env": { "EXPO_PUBLIC_API_URL": "" }
+    }
+  }
+}
