@@ -9,6 +9,7 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "com.earthscape.mobile",
+      "appleTeamId": "D8MJ8WCBK8",
       "supportsTablet": true,
       "infoPlist": {
         "NSAppTransportSecurity": {

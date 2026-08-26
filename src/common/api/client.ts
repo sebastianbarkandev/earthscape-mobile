@@ -47,6 +47,12 @@ export async function api<T = unknown>(path: string, opts: Options = {}): Promis
     credentials: 'include',
     headers: {
       Accept: 'application/json',
+      // Flask-WTF's WTF_CSRF_SSL_STRICT rejects secure POSTs whose Referer isn't
+      // same-origin ("The referrer header is missing."). Browsers send it
+      // implicitly; RN fetch doesn't, so send it on every request. Must match
+      // the request host, hence derived from the origin, and never seen by
+      // plain-http dev (the check only runs over https).
+      Referer: `${origin}/`,
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       ...headers,
     },
