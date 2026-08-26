@@ -5,7 +5,8 @@ import { StatusBar } from 'expo-status-bar';
 import { Provider } from 'react-redux';
 import { store } from '@/store';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { restoreSession } from '@/features/auth/authSlice';
+import { restoreSession, sessionExpired } from '@/features/auth/authSlice';
+import { setUnauthorizedHandler } from '@/common/api/client';
 import { theme } from '@/common/theme';
 
 /**
@@ -17,7 +18,9 @@ function Root() {
   const status = useAppSelector((s) => s.auth.status);
 
   useEffect(() => {
+    setUnauthorizedHandler(() => dispatch(sessionExpired()));
     dispatch(restoreSession());
+    return () => setUnauthorizedHandler(null);
   }, [dispatch]);
 
   if (status === 'restoring') {
@@ -39,6 +42,7 @@ function Root() {
       <Stack.Screen name="login" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="video/[eventId]" options={{ title: 'Video' }} />
+      <Stack.Screen name="golive" options={{ headerShown: false, presentation: 'fullScreenModal', gestureEnabled: false }} />
     </Stack>
   );
 }

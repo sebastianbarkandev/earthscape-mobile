@@ -5,5 +5,5 @@
     "allowJs": true,
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["**/*.ts", "**/*.tsx", "**/*.js"]
+  "include": ["**/*.ts", "**/*.tsx", "**/*.js", ".expo/types/**/*.ts", "expo-env.d.ts"]
 }

@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -9,12 +8,12 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { theme } from '@/common/theme';
 import { VideoCard } from '@/common/components/VideoCard';
 import { EmptyState } from '@/common/components/EmptyState';
-import { fetchVideos, setSort, type SortKey, type VideoListItem } from './librarySlice';
+import { fetchVideos, setSort, type SortKey } from './librarySlice';
+import { useOpenVideo } from './useOpenVideo';
 
 const SORTS: Array<{ key: SortKey; label: string }> = [
   { key: 'recently-uploaded', label: 'Recent' },
@@ -25,35 +24,16 @@ const SORTS: Array<{ key: SortKey; label: string }> = [
 
 export function LibraryScreen() {
   const dispatch = useAppDispatch();
-  const router = useRouter();
   const { items, page, hasNext, sort, status, error, total } = useAppSelector((s) => s.library);
+  const openVideo = useOpenVideo();
 
   useEffect(() => {
     dispatch(fetchVideos({ page: 1, sort }));
   }, [dispatch, sort]);
 
-  const openVideo = useCallback(
-    (item: VideoListItem) => {
-      // event_id in the list payload is an UNVERIFIED item (CLAUDE.md).
-      // If it's missing this alert fires -> the fix is the 2-line additive
-      // backend change adding event_id to videos_list_api's serializer.
-      if (!item.event_id) {
-        Alert.alert(
-          'Missing event_id',
-          'The /videos/list payload has no event_id. Add it to the list serializer in the earthscape repo (additive change).',
-        );
-        return;
-      }
-      router.push({
-        pathname: '/video/[eventId]',
-        params: { eventId: String(item.event_id), videoId: String(item.id) },
-      });
-    },
-    [router],
-  );
-
   const loadMore = useCallback(() => {
-    if (hasNext && status === 'idle') dispatch(fetchVideos({ page: page + 1, sort }));
+    // page 0 = first page not loaded yet (FlatList fires onEndReached on an empty list too).
+    if (page > 0 && hasNext && status === 'idle') dispatch(fetchVideos({ page: page + 1, sort }));
   }, [dispatch, hasNext, status, page, sort]);
 
   return (

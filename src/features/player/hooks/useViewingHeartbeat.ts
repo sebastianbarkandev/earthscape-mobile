@@ -13,6 +13,8 @@ export function useViewingHeartbeat(
   videoId: number | null,
   currentLiveState: string | null,
   onLiveStateChanged: (next: string | null) => void,
+  /** Read at each tick; the server only records a viewing session while not paused. */
+  isPaused: () => boolean = () => false,
 ) {
   const stateRef = useRef<string | null>(currentLiveState);
   stateRef.current = currentLiveState;
@@ -23,7 +25,7 @@ export function useViewingHeartbeat(
 
     const tick = async () => {
       try {
-        const res = await postViewing(videoId, false);
+        const res = await postViewing(videoId, isPaused());
         if (stopped) return;
         const next = res.liveStreamState ?? null;
         if (stateRef.current !== null && next !== stateRef.current) {
@@ -40,5 +42,6 @@ export function useViewingHeartbeat(
       stopped = true;
       clearInterval(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId, onLiveStateChanged]);
 }

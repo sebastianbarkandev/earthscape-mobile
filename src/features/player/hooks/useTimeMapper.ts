@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import { useAppSelector } from '@/store/hooks';
-// @ts-expect-error verbatim JS port without types
 import { createTimeMapper } from '@/common/lib/TimeMapper';
 
 /**

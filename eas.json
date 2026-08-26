@@ -7,10 +7,13 @@
     },
     "staging": {
       "distribution": "internal",
-      "env": { "EXPO_PUBLIC_API_URL": "https://REPLACE-staging-org.earthscape.com" }
+      "env": {
+        "EXPO_PUBLIC_API_BASE_DOMAIN": "earthscape.com",
+        "EXPO_PUBLIC_API_LOOKUP_HOST": "stage.earthscape.com"
+      }
     },
     "production": {
-      "env": { "EXPO_PUBLIC_API_URL": "" }
+      "env": { "EXPO_PUBLIC_API_BASE_DOMAIN": "earthscape.com" }
     }
   }
 }

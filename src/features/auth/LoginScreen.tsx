@@ -12,30 +12,39 @@ import {
 import { useRouter } from 'expo-router';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { theme } from '@/common/theme';
-import { login } from './authSlice';
+import { getHostLabel } from '@/common/config';
+import { chooseOrg, login } from './authSlice';
 
 /**
- * Subdomain + email + password -> Flask-Security session.
- * Subdomain first: it IS the tenant (CLAUDE.md rule 1) — customers already
- * know their org URL, so the field mirrors how they reach the website.
+ * Email + password only, matching the website's form. The org is not typed —
+ * the backend resolves it from the credentials (see authSlice). The one case
+ * that needs a second tap is an address registered in more than one org, since
+ * email is unique per-org, not globally (User's UniqueConstraint).
  */
 export function LoginScreen() {
   const dispatch = useAppDispatch();
   const router = useRouter();
   const status = useAppSelector((s) => s.auth.status);
   const error = useAppSelector((s) => s.auth.error);
-  const savedSubdomain = useAppSelector((s) => s.auth.subdomain);
+  const organizations = useAppSelector((s) => s.auth.organizations);
 
-  const [subdomain, setSubdomain] = useState(savedSubdomain);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
   const busy = status === 'loggingIn';
-  const canSubmit = email.length > 0 && password.length > 0 && (__DEV__ || subdomain.length > 0);
+  const picking = status === 'choosingOrg';
+  const canSubmit = email.length > 0 && password.length > 0;
 
   const submit = async () => {
-    const result = await dispatch(login({ subdomain, email, password }));
-    if (login.fulfilled.match(result)) router.replace('/(tabs)');
+    const result = await dispatch(login({ email, password }));
+    if (login.fulfilled.match(result) && result.payload.kind === 'loggedIn') {
+      router.replace('/(tabs)');
+    }
+  };
+
+  const pick = async (subdomain: string) => {
+    const result = await dispatch(chooseOrg({ subdomain, email, password }));
+    if (chooseOrg.fulfilled.match(result)) router.replace('/(tabs)');
   };
 
   return (
@@ -45,62 +54,66 @@ export function LoginScreen() {
     >
       <View style={styles.card}>
         <Text style={styles.brand}>Earthscape</Text>
-        <Text style={styles.tagline}>Sign in to your organization</Text>
+        <Text style={styles.tagline}>{picking ? 'Choose your organization' : 'Sign in'}</Text>
 
-        <View style={styles.subdomainRow}>
-          <TextInput
-            style={[styles.input, styles.subdomainInput]}
-            placeholder="organization"
-            placeholderTextColor={theme.textTertiary}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={subdomain}
-            onChangeText={setSubdomain}
-          />
-          <Text style={styles.domainSuffix}>.earthscape.com</Text>
-        </View>
+        {picking ? (
+          <>
+            {organizations.map((org) => (
+              <Pressable
+                key={org.subdomain}
+                onPress={() => pick(org.subdomain)}
+                disabled={busy}
+                style={({ pressed }) => [styles.orgRow, pressed && styles.orgRowPressed]}
+              >
+                <Text style={styles.orgName}>{org.name}</Text>
+                <Text style={styles.orgSubdomain}>{org.subdomain}</Text>
+              </Pressable>
+            ))}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+          </>
+        ) : (
+          <>
+            <TextInput
+              style={styles.input}
+              placeholder="Email"
+              placeholderTextColor={theme.textTertiary}
+              autoCapitalize="none"
+              autoComplete="email"
+              keyboardType="email-address"
+              value={email}
+              onChangeText={setEmail}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Password"
+              placeholderTextColor={theme.textTertiary}
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+              onSubmitEditing={canSubmit ? submit : undefined}
+            />
 
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          placeholderTextColor={theme.textTertiary}
-          autoCapitalize="none"
-          autoComplete="email"
-          keyboardType="email-address"
-          value={email}
-          onChangeText={setEmail}
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor={theme.textTertiary}
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-          onSubmitEditing={canSubmit ? submit : undefined}
-        />
+            {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-
-        <Pressable
-          onPress={submit}
-          disabled={!canSubmit || busy}
-          style={({ pressed }) => [
-            styles.button,
-            pressed && styles.buttonPressed,
-            (!canSubmit || busy) && styles.buttonDisabled,
-          ]}
-        >
-          {busy ? (
-            <ActivityIndicator color={theme.textOnAccent} />
-          ) : (
-            <Text style={styles.buttonText}>Sign in</Text>
-          )}
-        </Pressable>
-
-        {__DEV__ && (
-          <Text style={styles.devNote}>Dev build: requests go to the LAN API in config.ts</Text>
+            <Pressable
+              onPress={submit}
+              disabled={!canSubmit || busy}
+              style={({ pressed }) => [
+                styles.button,
+                pressed && styles.buttonPressed,
+                (!canSubmit || busy) && styles.buttonDisabled,
+              ]}
+            >
+              {busy ? (
+                <ActivityIndicator color={theme.textOnAccent} />
+              ) : (
+                <Text style={styles.buttonText}>Sign in</Text>
+              )}
+            </Pressable>
+          </>
         )}
+
+        {__DEV__ && <Text style={styles.devNote}>Backend: {getHostLabel()}</Text>}
       </View>
     </KeyboardAvoidingView>
   );
@@ -126,9 +139,6 @@ const styles = StyleSheet.create({
   },
   brand: { fontSize: 26, fontWeight: '700', color: theme.textPrimary },
   tagline: { fontSize: 13, color: theme.textSecondary, marginBottom: 8 },
-  subdomainRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  subdomainInput: { flex: 1 },
-  domainSuffix: { fontSize: 13, color: theme.textTertiary },
   input: {
     borderWidth: 1,
     borderColor: theme.borderStrong,
@@ -139,6 +149,16 @@ const styles = StyleSheet.create({
     color: theme.textPrimary,
     backgroundColor: theme.surface,
   },
+  orgRow: {
+    borderWidth: 1,
+    borderColor: theme.borderStrong,
+    borderRadius: theme.radiusSm,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  orgRowPressed: { backgroundColor: theme.accentTint, borderColor: theme.accent },
+  orgName: { fontSize: 15, fontWeight: '600', color: theme.textPrimary },
+  orgSubdomain: { fontSize: 12, color: theme.textTertiary, marginTop: 2 },
   error: { color: theme.danger, fontSize: 13 },
   button: {
     backgroundColor: theme.accent,

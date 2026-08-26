@@ -1,0 +1,8 @@
+{
+  "name": "earthscape-live",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Earthscape mobile live publisher: camera + mic -> SRT (MPEG-TS, H.264/AAC) via HaishinKit. iOS only for now.",
+  "main": "index.ts",
+  "types": "index.ts"
+}

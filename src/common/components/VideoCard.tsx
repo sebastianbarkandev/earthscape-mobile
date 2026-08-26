@@ -1,6 +1,7 @@
 import React from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { theme } from '@/common/theme';
+import { resolveMediaUrl } from '@/common/config';
 import { formatDuration, isoToDate } from '@/common/lib/normalizeDate';
 import { LiveBadge } from './LiveBadge';
 import type { VideoListItem } from '@/features/library/librarySlice';
@@ -14,14 +15,16 @@ interface Props {
 /** Thumbnail card shared by Library and Live grids (web: video-thumbnail-container). */
 export function VideoCard({ item, live, onPress }: Props) {
   const recorded = isoToDate(item.start ?? item.date_posted);
+  // '/static/thumbnails/...' on on-premise orgs, absolute CDN URL otherwise.
+  const thumb = resolveMediaUrl(item.thumbnail_url);
   return (
     <Pressable
       onPress={() => onPress(item)}
       style={({ pressed }) => [styles.card, pressed && styles.pressed]}
     >
       <View style={styles.thumbWrap}>
-        {item.thumbnail_url ? (
-          <Image source={{ uri: item.thumbnail_url }} style={styles.thumb} resizeMode="cover" />
+        {thumb ? (
+          <Image source={{ uri: thumb }} style={styles.thumb} resizeMode="cover" />
         ) : (
           <View style={[styles.thumb, styles.thumbFallback]} />
         )}

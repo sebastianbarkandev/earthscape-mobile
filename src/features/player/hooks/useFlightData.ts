@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { appendFlightData } from '../playerSlice';
+import { appendGraphs } from '../graphSlice';
 import { getFlightData } from '../api';
+import { ApiError } from '@/common/api/client';
 
 const LIVE_POLL_MS = 7000;
 
@@ -13,7 +15,11 @@ const LIVE_POLL_MS = 7000;
  * Note the permission quirk: this endpoint checks LIVESTREAMS READ while the
  * stream is live and VIDEOS READ otherwise (a 403 during transition = reload).
  */
-export function useFlightData(videoId: number | null) {
+/**
+ * @param onForbidden CLAUDE.md quirk: flight_data checks LIVESTREAMS READ while live and VIDEOS READ
+ * otherwise — a 403 mid-transition means "reload the event", not a client bug.
+ */
+export function useFlightData(videoId: number | null, onForbidden?: () => void) {
   const dispatch = useAppDispatch();
   const isLive = useAppSelector((s) => s.player.isLive);
   const lastUtcRef = useRef<number | null>(null);
@@ -38,11 +44,16 @@ export function useFlightData(videoId: number | null) {
           const fd = res?.flight_data;
           if (!fd || fd.last_flight_point_utc == null) break;
           dispatch(appendFlightData(fd));
+          if (fd.graphs) dispatch(appendGraphs(fd.graphs));
           if (after !== undefined && fd.last_flight_point_utc <= after) break;
           after = fd.last_flight_point_utc;
           lastUtcRef.current = after;
         }
       } catch (e) {
+        if (e instanceof ApiError && e.status === 403 && onForbidden) {
+          onForbidden();
+          return;
+        }
         // Non-fatal: map simply stops updating; heartbeat handles live<->VOD flips.
         console.warn('flight data fetch failed', e);
       } finally {
@@ -56,5 +67,6 @@ export function useFlightData(videoId: number | null) {
       cancelled.current = true;
       if (timer) clearInterval(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId, isLive, dispatch]);
 }

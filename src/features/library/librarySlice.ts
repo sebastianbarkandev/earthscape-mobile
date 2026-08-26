@@ -12,9 +12,13 @@ export interface VideoListItem {
   start: string | null; // ISO, may lack 'Z'
   thumbnail_url: string | null;
   deleted_at: string | null;
-  tail?: string;
-  event_id?: number; // ⚠ UNVERIFIED in list payload — see CLAUDE.md; needed for player navigation
-  live_stream_id?: number; // ⚠ UNVERIFIED in /live/list payload
+  tail?: string | null; // omitted when falsy in /videos/list, always present (nullable) in /live/list
+  /** Present on the earthscape-mobile backend branch (additive); absent on older backends -> useOpenVideo falls back to GET /videos/{id}/event_id. */
+  event_id?: number;
+  /** /live/list only. */
+  live_stream_id?: number | null;
+  /** /live/list only: raw LiveStream.status (NOT the derived live_stream_state of the event payload). */
+  live_stream_status?: string | null;
   user: {
     id: number;
     username: string;
@@ -23,12 +27,22 @@ export interface VideoListItem {
   } | null;
 }
 
+/** GET /api/v1/videos/list envelope. */
 interface Page {
   items: VideoListItem[];
   page: number;
   pages: number;
   total: number;
   has_next: boolean;
+}
+
+/** GET /api/v1/live/list envelope — different from Page: no has_next/has_prev/sort, per_page fixed at 24. */
+interface LivePage {
+  items: VideoListItem[];
+  page: number;
+  pages: number;
+  total: number;
+  per_page: number;
 }
 
 export type SortKey =
@@ -73,7 +87,7 @@ export const fetchVideos = createAsyncThunk(
 );
 
 export const fetchLive = createAsyncThunk('library/fetchLive', async () => {
-  return api<Page>('/api/v1/live/list?page=1');
+  return api<LivePage>('/api/v1/live/list?page=1');
 });
 
 const librarySlice = createSlice({

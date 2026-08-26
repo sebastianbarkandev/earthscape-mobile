@@ -1,40 +1,46 @@
 import React from 'react';
-import { Text } from 'react-native';
 import { Redirect, Tabs } from 'expo-router';
 import { useAppSelector } from '@/store/hooks';
 import { theme } from '@/common/theme';
+import { AppHeader } from '@/common/components/AppHeader';
+import { Icon, type IconName } from '@/common/components/Icon';
 
-function TabGlyph({ glyph, color }: { glyph: string; color: string }) {
-  return <Text style={{ fontSize: 20, color }}>{glyph}</Text>;
+function TabIcon({ name, color }: { name: IconName; color: string }) {
+  return <Icon name={name} size={18} color={color} />;
 }
 
+/** Footer tab bar is the primary navigation (Library · Search · Live); the header carries logo, search and account. */
 export default function TabsLayout() {
   const status = useAppSelector((s) => s.auth.status);
+  const bootstrap = useAppSelector((s) => s.auth.bootstrap);
   if (status !== 'loggedIn') return <Redirect href="/login" />;
+
+  const features = bootstrap?.features ?? {};
+  const nav = bootstrap?.nav_permissions ?? {};
+  // Web Sidebar gate for Live minus its on_premise exclusion (the dev org is on-premise and /live/list works there).
+  const showLive = !bootstrap || (features.live_enabled !== false && nav.can_read_livestreams !== false);
 
   return (
     <Tabs
       screenOptions={{
+        header: () => <AppHeader />,
         tabBarActiveTintColor: theme.accent,
         tabBarInactiveTintColor: theme.textTertiary,
         tabBarStyle: { backgroundColor: theme.surface, borderTopColor: theme.border },
-        headerStyle: { backgroundColor: theme.surface },
-        headerTintColor: theme.textPrimary,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
       }}
     >
       <Tabs.Screen
         name="index"
-        options={{
-          title: 'Library',
-          tabBarIcon: ({ color }) => <TabGlyph glyph="▦" color={color} />,
-        }}
+        options={{ title: 'Library', tabBarIcon: ({ color }) => <TabIcon name="table-cells-large" color={color} /> }}
+      />
+      <Tabs.Screen
+        name="search"
+        options={{ title: 'Search', tabBarIcon: ({ color }) => <TabIcon name="magnifying-glass" color={color} /> }}
       />
       <Tabs.Screen
         name="live"
-        options={{
-          title: 'Live',
-          tabBarIcon: ({ color }) => <TabGlyph glyph="◉" color={color} />,
-        }}
+        options={{ title: 'Live', href: showLive ? undefined : null, tabBarIcon: ({ color }) => <TabIcon name="tower-broadcast" color={color} /> }}
       />
     </Tabs>
   );

@@ -12,14 +12,49 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true
-        }
+          "NSAllowsLocalNetworking": true,
+          "NSExceptionDomains": {
+            "localhost": {
+              "NSIncludesSubdomains": true,
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            },
+            "earthscape.localdocker": {
+              "NSIncludesSubdomains": true,
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            },
+            "nip.io": {
+              "NSIncludesSubdomains": true,
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
+        },
+        "NSPhotoLibraryAddUsageDescription": "Earthscape saves screenshots and downloaded videos to your photo library.",
+        "NSPhotoLibraryUsageDescription": "Earthscape saves screenshots and downloaded videos to your photo library.",
+        "NSCameraUsageDescription": "Earthscape uses the camera to stream live video from your phone.",
+        "NSMicrophoneUsageDescription": "Earthscape uses the microphone to stream live audio from your phone.",
+        "NSLocationWhenInUseUsageDescription": "Earthscape attaches your position to live streams so viewers can see where the video is from."
       }
     },
     "plugins": [
       "expo-router",
       "expo-video",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-asset",
+      "expo-font",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Earthscape saves screenshots and downloaded videos to your photo library.",
+          "savePhotosPermission": "Earthscape saves screenshots and downloaded videos to your photo library.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Earthscape attaches your position to live streams so viewers can see where the video is from."
+        }
+      ]
     ],
     "experiments": {
       "tsconfigPaths": true,
