@@ -64,7 +64,7 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
   // (the player screen's ProgramStrip tiles) freezes while this hold is held. Taken on mount,
   // i.e. BEFORE the preview claims the session, and released when the screen goes away.
   useHoldCaptureAudioFocus();
-  const { broadcast, start, confirmStop, leave } = useBroadcast();
+  const { broadcast, start, confirmStop, leave, retryTelemetry } = useBroadcast();
   const liveEnabled = useAppSelector((s) => s.auth.bootstrap?.features?.live_enabled ?? true);
   const user = useAppSelector((s) => s.auth.bootstrap?.current_user ?? null);
   const [perm, setPerm] = useState<PermissionStatus | null>(null);
@@ -129,6 +129,21 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
     const label = name.trim() || undefined;
     await start({ eventId, streamName: label, programType: eventId ? label : undefined, preset, latencyMs: latency.ms, telemetry: broadcast.telemetry.enabled });
   }, [perm, start, eventId, joinGate.status, name, preset, latency.ms, broadcast.telemetry.enabled]);
+
+  /**
+   * The one affordance for a GPS denial. It has to live in the UNCONDITIONAL hint area below
+   * the stats: the "GPS" stat itself only renders while `controlsOpen`, which starts false in
+   * landscape — the phone-on-a-mount orientation where this is most likely to be noticed.
+   */
+  const onEnableGps = useCallback(() => { retryTelemetry().catch(() => undefined); }, [retryTelemetry]);
+
+  const onToggleTelemetry = useCallback(() => {
+    const next = !broadcast.telemetry.enabled;
+    dispatch(setTelemetryEnabled(next));
+    // A remembered iOS denial is answered silently, so flipping the intent alone would leave
+    // GPS off with no prompt and no explanation: ask again (or open Settings) right here.
+    if (next && broadcast.telemetry.denied) retryTelemetry().catch(() => undefined);
+  }, [broadcast.telemetry.enabled, broadcast.telemetry.denied, dispatch, retryTelemetry]);
 
   const onClose = useCallback(() => {
     if (isLive || phase === 'creating') {
@@ -329,6 +344,20 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
           <Text style={styles.hint}>Connected · waiting for the server to publish the first segment…</Text>
         )}
         {s?.playlist_ready && isLive && publisher === 'publishing' && <Text style={styles.hintOk}>Viewers can watch now.</Text>}
+        {/* Not inside the stats block on purpose (see `onEnableGps`): a denial there is invisible
+            in landscape, which is exactly how a mounted phone streams. */}
+        {isLive && !broadcast.telemetry.enabled && (
+          <Pressable
+            testID="golive-gps-hint"
+            onPress={onEnableGps}
+            hitSlop={verticalTouchSlop(15)}
+            accessibilityRole="button"
+            accessibilityLabel="GPS off — tap to enable location"
+            accessibilityHint="Asks for location access again. If iOS no longer prompts, this opens Settings — changing location access there restarts the app and ends the stream."
+          >
+            <Text style={styles.hintAction} {...denseText}>GPS off — tap to enable location</Text>
+          </Pressable>
+        )}
 
         {!isLive && phase !== 'ended' && phase !== 'error' && controlsOpen && (
           // RESP-026: the ONLY shrinkable region of the block — the controls row and the
@@ -362,7 +391,7 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
             </View>
             <Text style={styles.hint}>{latency.hint} Adaptive bitrate {preset.minBitrateKbps}–{preset.maxBitrateKbps} kbps, H.264 {preset.height}p{preset.fps}.</Text>
             <Pressable
-              onPress={() => dispatch(setTelemetryEnabled(!broadcast.telemetry.enabled))}
+              onPress={onToggleTelemetry}
               style={styles.toggleRow}
               accessibilityRole="checkbox"
               accessibilityState={{ checked: broadcast.telemetry.enabled }}
@@ -501,6 +530,8 @@ const styles = StyleSheet.create({
   reconnectText: { color: theme.warningText, fontSize: 12, lineHeight: 16 },
   hint: { color: theme.overlayTextMuted, fontSize: 11, lineHeight: 15 },
   hintOk: { color: theme.successText, fontSize: 11, fontWeight: '600' },
+  // A hint line that is also a control: 15pt box, grown to 44pt by `verticalTouchSlop` (UI-007).
+  hintAction: { color: theme.warningText, fontSize: 11, lineHeight: 15, fontWeight: '700', textDecorationLine: 'underline' },
   /** RESP-026: shrinks (and then scrolls) before the pinned controls row does. */
   settingsScroll: { flexGrow: 0, flexShrink: 1 },
   settings: { gap: 8 },

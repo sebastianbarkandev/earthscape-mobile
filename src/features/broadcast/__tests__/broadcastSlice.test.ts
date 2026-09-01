@@ -174,3 +174,39 @@ describe('fatalReason survives the end sequence', () => {
     expect(s.error).toBe(s.fatalReason);
   });
 });
+
+/**
+ * A denied location permission is remembered by iOS and answered silently ever after, so the
+ * denial has to be REMEMBERED IN STATE — it is the only thing that tells the Go Live screen to
+ * offer a retry / Settings link instead of a dead "GPS: off".
+ */
+import { setTelemetryEnabled, telemetryProgress } from '../broadcastSlice';
+
+describe('telemetry.denied', () => {
+  it('starts false and is set together with enabled:false when iOS refuses', () => {
+    expect(init().telemetry).toMatchObject({ enabled: true, denied: false });
+    const s = reducer(init(), telemetryProgress({ enabled: false, denied: true }));
+    expect(s.telemetry).toMatchObject({ enabled: false, denied: true });
+    // The partial merge must not disturb the counters the flush loop owns.
+    expect(s.telemetry).toMatchObject({ sent: 0, pending: 0, failures: 0, lastFixAt: null });
+  });
+
+  it('a granted retry clears it, and the flush-progress merges leave it alone', () => {
+    let s = reducer(init(), telemetryProgress({ enabled: false, denied: true }));
+    s = reducer(s, telemetryProgress({ sent: 3, pending: 1, failures: 0 }));
+    expect(s.telemetry).toMatchObject({ denied: true, enabled: false, sent: 3 });
+    s = reducer(s, telemetryProgress({ enabled: true, denied: false }));
+    expect(s.telemetry).toMatchObject({ denied: false, enabled: true, sent: 3 });
+  });
+
+  it('the checkbox intent alone does not clear it (only a real permission answer can)', () => {
+    let s = reducer(init(), telemetryProgress({ enabled: false, denied: true }));
+    s = reducer(s, setTelemetryEnabled(true));
+    expect(s.telemetry).toMatchObject({ enabled: true, denied: true });
+  });
+
+  it('resetBroadcast clears it with the rest of the broadcast', () => {
+    const s = reducer(reducer(init(), telemetryProgress({ enabled: false, denied: true })), resetBroadcast());
+    expect(s.telemetry).toMatchObject({ enabled: true, denied: false });
+  });
+});

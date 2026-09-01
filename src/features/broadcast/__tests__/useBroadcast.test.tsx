@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { Linking } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
@@ -320,6 +321,179 @@ describe('useBroadcast state machine (phone joining a live event)', () => {
       await act(async () => { jest.advanceTimersByTime(TELEMETRY_FLUSH_MS); });
       expect(mockedPost).toHaveBeenCalledTimes(1);
       expect(mockedPost.mock.calls[0][0]).toBe(12); // posted against the new stream
+    });
+  });
+
+  /**
+   * A denied location permission used to be permanent: `startTelemetry` gave up for the life of
+   * the stream and iOS answers every later request SILENTLY from the remembered denial, so the
+   * user saw "GPS: off" and had no way to change it. `retryTelemetry()` is the way back — and it
+   * must obey the SEC-022 lifecycle rules the terminal effect exists to enforce.
+   */
+  describe('retryTelemetry (enabling GPS after a denial)', () => {
+    const TELEMETRY_FLUSH_MS = 2000;
+    type Fix = { coords: { latitude: number; longitude: number; altitude: number | null; heading: number | null }; timestamp: number };
+    const fixAt = (timestamp: number): Fix => ({ coords: { latitude: 45.5, longitude: -122.6, altitude: 300, heading: 90 }, timestamp });
+    let openSettings: jest.SpyInstance;
+
+    beforeEach(() => {
+      openSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
+    });
+    afterEach(() => openSettings.mockRestore());
+
+    /** Live, with telemetry deliberately not armed at start (the denial case, minus the prompt). */
+    const goLiveWithoutTelemetry = async (id = 9) => {
+      mockedCreate.mockResolvedValueOnce(stream(id));
+      await act(async () => { await api.start({ ...startArgs, telemetry: false }); });
+      act(() => emit('onStateChange', { state: 'publishing', previous: 'connecting', reason: 'connected' }));
+      expect(phase()).toBe('live');
+      expect(mockedWatch).not.toHaveBeenCalled();
+    };
+
+    it('a denial at start records `denied` (and turns telemetry off) instead of failing silently', async () => {
+      mockedCreate.mockResolvedValueOnce(stream(9));
+      mockedPerm.mockResolvedValueOnce({ granted: false, canAskAgain: true });
+      await act(async () => { await api.start({ ...startArgs, telemetry: true }); });
+      await flush();
+      expect(mockedWatch).not.toHaveBeenCalled();
+      expect(store.getState().broadcast.telemetry).toMatchObject({ enabled: false, denied: true });
+    });
+
+    it('arms the watch mid-stream against the CURRENT stream and clears `denied`', async () => {
+      await goLiveWithoutTelemetry(9);
+      let cb: ((loc: Fix) => void) | null = null;
+      mockedPerm.mockResolvedValueOnce({ granted: true, canAskAgain: false });
+      mockedWatch.mockImplementationOnce(async (_opts: unknown, c: (loc: Fix) => void) => { cb = c; return { remove: jest.fn() }; });
+      let ok = false;
+      await act(async () => { ok = await api.retryTelemetry(); });
+      expect(ok).toBe(true);
+      expect(store.getState().broadcast.telemetry).toMatchObject({ enabled: true, denied: false });
+      expect(openSettings).not.toHaveBeenCalled();
+      act(() => cb!(fixAt(1_000_000)));
+      await act(async () => { jest.advanceTimersByTime(TELEMETRY_FLUSH_MS); });
+      expect(mockedPost).toHaveBeenCalledTimes(1);
+      expect(mockedPost.mock.calls[0][0]).toBe(9);
+    });
+
+    it('opens Settings only when iOS says it will not prompt again', async () => {
+      await goLiveWithoutTelemetry(9);
+      mockedPerm.mockResolvedValueOnce({ granted: false, canAskAgain: true });
+      let ok = true;
+      await act(async () => { ok = await api.retryTelemetry(); });
+      expect(ok).toBe(false);
+      expect(openSettings).not.toHaveBeenCalled(); // iOS will ask again — no need to leave the app
+      mockedPerm.mockResolvedValueOnce({ granted: false, canAskAgain: false });
+      await act(async () => { ok = await api.retryTelemetry(); });
+      expect(ok).toBe(false);
+      expect(openSettings).toHaveBeenCalledTimes(1);
+      expect(store.getState().broadcast.telemetry.denied).toBe(true);
+    });
+
+    // ── SEC-022: a retry must never resurrect telemetry on a stream that is gone ──
+    it('is a no-op once the publisher has failed fatally (phase error)', async () => {
+      await goLiveWithoutTelemetry(9);
+      mockedEnd.mockResolvedValue({ success: true, status: 'ending' });
+      act(() => emit('onError', { code: 'srt_fatal', message: 'link lost for good', fatal: true }));
+      expect(phase()).toBe('error');
+      let ok = true;
+      await act(async () => { ok = await api.retryTelemetry(); });
+      expect(ok).toBe(false);
+      expect(mockedPerm).not.toHaveBeenCalled();
+      expect(mockedWatch).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op after a clean End (phase ended)', async () => {
+      await goLiveWithoutTelemetry(9);
+      mockedEnd.mockResolvedValueOnce({ success: true, status: 'ending' });
+      await act(async () => { await api.stop(); });
+      expect(phase()).toBe('ended');
+      let ok = true;
+      await act(async () => { ok = await api.retryTelemetry(); });
+      expect(ok).toBe(false);
+      expect(mockedPerm).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op while the stop is still in flight (phase 'ending')", async () => {
+      await goLiveWithoutTelemetry(9);
+      let release!: () => void;
+      native.stopPublish.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+      mockedEnd.mockResolvedValueOnce({ success: true, status: 'ending' });
+      let stopping!: Promise<void>;
+      act(() => { stopping = api.stop(); });
+      expect(phase()).toBe('ending');
+      let ok = true;
+      await act(async () => { ok = await api.retryTelemetry(); });
+      expect(ok).toBe(false);
+      expect(mockedPerm).not.toHaveBeenCalled();
+      await act(async () => { release(); await stopping; });
+    });
+
+    it('is a no-op before a stream exists (nothing to attach fixes to)', async () => {
+      let ok = true;
+      await act(async () => { ok = await api.retryTelemetry(); });
+      expect(ok).toBe(false);
+      expect(mockedPerm).not.toHaveBeenCalled();
+    });
+
+    it('two taps register exactly one watch and one flush timer', async () => {
+      await goLiveWithoutTelemetry(9);
+      let resolvePerm!: (p: { granted: boolean; canAskAgain: boolean }) => void;
+      mockedPerm.mockImplementationOnce(() => new Promise((r) => { resolvePerm = r; }));
+      const remove = jest.fn();
+      let cb: ((loc: Fix) => void) | null = null;
+      mockedWatch.mockImplementationOnce(async (_opts: unknown, c: (loc: Fix) => void) => { cb = c; return { remove }; });
+      let first!: Promise<boolean>;
+      act(() => { first = api.retryTelemetry(); });
+      let second = true;
+      await act(async () => { second = await api.retryTelemetry(); }); // while the sheet is up
+      expect(second).toBe(false);
+      await act(async () => { resolvePerm({ granted: true, canAskAgain: false }); await first; });
+      let third = true;
+      await act(async () => { third = await api.retryTelemetry(); }); // while already sampling
+      expect(third).toBe(false);
+      expect(mockedPerm).toHaveBeenCalledTimes(1);
+      expect(mockedWatch).toHaveBeenCalledTimes(1);
+      // One fix, one flush interval, exactly one POST — a second flush timer would double it.
+      act(() => cb!(fixAt(1_000_000)));
+      await act(async () => { jest.advanceTimersByTime(TELEMETRY_FLUSH_MS); });
+      expect(mockedPost).toHaveBeenCalledTimes(1);
+    });
+
+    it('a stream that dies while the permission sheet is up never gets a watch', async () => {
+      await goLiveWithoutTelemetry(9);
+      mockedEnd.mockResolvedValue({ success: true, status: 'ending' });
+      let resolvePerm!: (p: { granted: boolean; canAskAgain: boolean }) => void;
+      mockedPerm.mockImplementationOnce(() => new Promise((r) => { resolvePerm = r; }));
+      let pending!: Promise<boolean>;
+      act(() => { pending = api.retryTelemetry(); });
+      act(() => emit('onError', { code: 'srt_fatal', message: 'link lost for good', fatal: true }));
+      expect(phase()).toBe('error');
+      let ok = true;
+      await act(async () => { resolvePerm({ granted: true, canAskAgain: false }); ok = await pending; });
+      expect(ok).toBe(false);
+      expect(mockedWatch).not.toHaveBeenCalled();
+      await act(async () => { jest.advanceTimersByTime(5 * TELEMETRY_FLUSH_MS); });
+      expect(mockedPost).not.toHaveBeenCalled();
+    });
+
+    it('a stream that dies while watchPositionAsync is resolving removes the orphan watch', async () => {
+      await goLiveWithoutTelemetry(9);
+      mockedEnd.mockResolvedValue({ success: true, status: 'ending' });
+      mockedPerm.mockResolvedValueOnce({ granted: true, canAskAgain: false });
+      const remove = jest.fn();
+      let resolveWatch!: (s: { remove: jest.Mock }) => void;
+      mockedWatch.mockImplementationOnce(() => new Promise((r) => { resolveWatch = r; }));
+      let pending!: Promise<boolean>;
+      act(() => { pending = api.retryTelemetry(); });
+      await flush(); // the permission answer lands; we are now inside watchPositionAsync
+      expect(mockedWatch).toHaveBeenCalledTimes(1);
+      act(() => emit('onError', { code: 'srt_fatal', message: 'link lost for good', fatal: true }));
+      let ok = true;
+      await act(async () => { resolveWatch({ remove }); ok = await pending; });
+      expect(ok).toBe(false);
+      expect(remove).toHaveBeenCalledTimes(1); // nothing else owns it any more
+      await act(async () => { jest.advanceTimersByTime(5 * TELEMETRY_FLUSH_MS); });
+      expect(mockedPost).not.toHaveBeenCalled();
     });
   });
 });

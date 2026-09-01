@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Linking } from 'react-native';
 import * as Location from 'expo-location';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
@@ -35,6 +35,16 @@ export interface StartBroadcastArgs {
   latencyMs: number;
   telemetry: boolean;
 }
+
+/**
+ * Result of one attempt to arm GPS telemetry:
+ *  - `started`  the watch + flush loop are running for this stream;
+ *  - `denied`   iOS said no, but it will still prompt next time;
+ *  - `blocked`  iOS said no and will NOT prompt again — only the Settings app can change it;
+ *  - `aborted`  the broadcast (or the screen) went away while we were awaiting iOS, so
+ *               nothing was armed on purpose (SEC-022).
+ */
+export type TelemetryStart = 'started' | 'denied' | 'blocked' | 'aborted';
 
 /**
  * Orchestrates one broadcast: server stream → native SRT publisher → GPS
@@ -122,7 +132,20 @@ export function useBroadcast() {
     };
   }, [live]);
 
+  /**
+   * Bumped by every stopTelemetry(). `startTelemetry` awaits iOS twice (the permission sheet
+   * — which the user can sit on for minutes — and `watchPositionAsync`), and the broadcast can
+   * end in either window; a watch armed afterwards would be owned by a teardown that has
+   * ALREADY run and would keep sampling + POSTing forever (SEC-022, same failure mode as
+   * REG-007's `teardownToken`). Every arm captures the token and refuses to register anything
+   * once it has moved.
+   */
+  const telemetryToken = useRef(0);
+  /** A `retryTelemetry()` still awaiting iOS — a second tap must not open a second watch. */
+  const telemetryArming = useRef(false);
+
   const stopTelemetry = useCallback(() => {
+    telemetryToken.current += 1;
     locationSub.current?.remove();
     locationSub.current = null;
     if (flushTimer.current) clearInterval(flushTimer.current);
@@ -135,6 +158,7 @@ export function useBroadcast() {
   // keep sampling location and POSTing to a dead stream (SEC-022). A clean stop() has already
   // flushed by the time it reaches 'ended', so whatever is still queued here is undeliverable: drop
   // it (leave()'s pre-/end flush then sees an empty queue and posts nothing, no duplicate batch).
+  // `retryTelemetry()` below deliberately cannot undo this: it refuses both phases outright.
   const terminal = broadcast.phase === 'ended' || broadcast.phase === 'error';
   useEffect(() => {
     if (!terminal) return;
@@ -142,28 +166,77 @@ export function useBroadcast() {
     queue.current.clear();
   }, [terminal, stopTelemetry]);
 
+  /**
+   * Ask for location and arm the 1 Hz watch + 2 s flush loop against `id`. Callable at start
+   * AND mid-stream (`retryTelemetry`), so it owns the whole permission dance rather than
+   * assuming a fresh, never-asked-for state.
+   */
   const startTelemetry = useCallback(
-    async (id: number) => {
+    async (id: number): Promise<TelemetryStart> => {
       stopTelemetry();
+      const token = telemetryToken.current;
       const perm = await Location.requestForegroundPermissionsAsync();
+      if (telemetryToken.current !== token || !alive.current) return 'aborted';
       if (!perm.granted) {
-        dispatch(telemetryProgress({ enabled: false }));
-        return;
+        // `denied` is what the Go Live screen turns into a visible way out; iOS answers every
+        // later request silently from this denial, so nothing else would ever surface it.
+        dispatch(telemetryProgress({ enabled: false, denied: true }));
+        return perm.canAskAgain === false ? 'blocked' : 'denied';
       }
       const q = queue.current;
-      locationSub.current = await Location.watchPositionAsync(
+      const sub = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 0 },
         (loc) => {
           if (q.push(fixFromLocation(loc))) dispatch(telemetryProgress({ pending: q.pending, lastFixAt: Date.now() }));
         },
       );
+      // The stream can end (or the screen close) while `watchPositionAsync` is resolving: the
+      // teardown that would have removed this watch has then already run, so remove it here.
+      if (telemetryToken.current !== token || !alive.current) {
+        sub.remove();
+        return 'aborted';
+      }
+      locationSub.current = sub;
       flushTimer.current = setInterval(async () => {
         await q.flush((fixes) => postTelemetry(id, fixes));
         dispatch(telemetryProgress({ sent: q.sent, pending: q.pending, failures: q.failures }));
       }, TELEMETRY_FLUSH_MS);
+      dispatch(telemetryProgress({ enabled: true, denied: false }));
+      return 'started';
     },
     [dispatch, stopTelemetry],
   );
+
+  /**
+   * The user asked for GPS after the fact — the "GPS off" hint while live, or re-checking the
+   * box after a denial. `args.telemetry` is read exactly once inside `start()`, so this is the
+   * ONLY path that can arm telemetry mid-stream.
+   *
+   * SEC-022: it must never resurrect a watch on a stream that is over. The phase guard refuses
+   * 'ending'/'ended'/'error' outright, and `startTelemetry`'s token check refuses to register
+   * anything if the stream ends while iOS is showing the permission sheet — so the terminal
+   * effect above stays the last word.
+   */
+  const retryTelemetry = useCallback(async (): Promise<boolean> => {
+    const b = broadcastRef.current;
+    if (b.phase === 'ending' || b.phase === 'ended' || b.phase === 'error') return false;
+    const id = b.stream?.id;
+    if (id == null) return false; // nothing to attach fixes to yet (idle / still creating)
+    if (locationSub.current || telemetryArming.current) return false; // already sampling, or a tap is in flight
+    telemetryArming.current = true;
+    let outcome: TelemetryStart;
+    try {
+      outcome = await startTelemetry(id);
+    } catch {
+      return false;
+    } finally {
+      telemetryArming.current = false;
+    }
+    // iOS will not ask again — the Settings app is the only remaining way to turn GPS on.
+    // (Changing it there terminates the app, which also ends this stream: the UI says so.)
+    if (outcome === 'blocked') await Linking.openSettings().catch(() => undefined);
+    return outcome === 'started';
+  }, [startTelemetry]);
 
   /** Create the server-side stream (new event or join) and connect the publisher. */
   const start = useCallback(
@@ -291,5 +364,5 @@ export function useBroadcast() {
     ]);
   }, [stop]);
 
-  return { broadcast, start, stop, confirmStop, leave, presets: PRESETS };
+  return { broadcast, start, stop, confirmStop, leave, retryTelemetry, presets: PRESETS };
 }

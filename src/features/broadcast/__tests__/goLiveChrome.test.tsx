@@ -29,7 +29,7 @@ jest.mock('@/common/hooks/useKeyboardHeight', () => ({ useKeyboardHeight: () => 
 jest.mock('../useJoinGate', () => ({ useJoinGate: () => ({ status: 'allowed' }) }));
 jest.mock('../useBroadcast', () => {
   const reducer = jest.requireActual('../broadcastSlice').default;
-  return { useBroadcast: () => ({ broadcast: reducer(undefined, { type: '@@init' }), start: jest.fn(), stop: jest.fn(), confirmStop: jest.fn(), leave: jest.fn(async () => undefined) }) };
+  return { useBroadcast: () => ({ broadcast: reducer(undefined, { type: '@@init' }), start: jest.fn(), stop: jest.fn(), confirmStop: jest.fn(), leave: jest.fn(async () => undefined), retryTelemetry: jest.fn(async () => false) }) };
 });
 jest.mock('../../../../modules/earthscape-live', () => {
   const preset = { width: 1280, height: 720, fps: 30, bitrateKbps: 2500, maxBitrateKbps: 3500, minBitrateKbps: 500 };

@@ -26,7 +26,14 @@ export interface BroadcastState {
   nextRetryMs: number | null;
   stats: PublisherStats | null;
   network: NetworkPathEvent | null;
-  telemetry: { sent: number; pending: number; failures: number; enabled: boolean; lastFixAt: number | null };
+  /**
+   * GPS telemetry. `enabled` is the live truth ("fixes are being attached"), not just the
+   * checkbox intent — a denied location permission turns it off. `denied` records that iOS
+   * refused, which is what makes the Go Live screen offer a retry: a second
+   * `requestForegroundPermissionsAsync()` is answered SILENTLY from the remembered denial,
+   * so without an explicit affordance the user has no way back (SEC-022 companion bug).
+   */
+  telemetry: { sent: number; pending: number; failures: number; enabled: boolean; denied: boolean; lastFixAt: number | null };
   startedAt: number | null; // ms epoch when publishing first succeeded
   error: string | null;
   /**
@@ -52,7 +59,7 @@ const initialState: BroadcastState = {
   nextRetryMs: null,
   stats: null,
   network: null,
-  telemetry: { sent: 0, pending: 0, failures: 0, enabled: true, lastFixAt: null },
+  telemetry: { sent: 0, pending: 0, failures: 0, enabled: true, denied: false, lastFixAt: null },
   startedAt: null,
   error: null,
   fatalReason: null,

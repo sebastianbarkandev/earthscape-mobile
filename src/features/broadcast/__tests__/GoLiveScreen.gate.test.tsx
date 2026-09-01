@@ -29,7 +29,7 @@ jest.mock('../useJoinGate', () => ({ useJoinGate: (...args: unknown[]) => mockUs
 jest.mock('../useBroadcast', () => {
   const broadcastReducer = require('../broadcastSlice').default;
   const idle = broadcastReducer(undefined, { type: '@@init' });
-  return { useBroadcast: () => ({ broadcast: idle, start: mockStart, stop: jest.fn(), confirmStop: jest.fn(), leave: jest.fn(async () => undefined) }) };
+  return { useBroadcast: () => ({ broadcast: idle, start: mockStart, stop: jest.fn(), confirmStop: jest.fn(), leave: jest.fn(async () => undefined), retryTelemetry: jest.fn(async () => false) }) };
 });
 jest.mock('../../../../modules/earthscape-live', () => {
   const preset = { width: 1280, height: 720, fps: 30, bitrateKbps: 2500, maxBitrateKbps: 3500, minBitrateKbps: 500 };

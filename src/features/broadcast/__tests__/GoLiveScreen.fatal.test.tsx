@@ -36,7 +36,7 @@ jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({
 jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({ __esModule: true, default: () => ({ width: 393, height: 852, scale: 3, fontScale: 1 }) }));
 jest.mock('../useJoinGate', () => ({ useJoinGate: () => ({ status: 'allowed', primaryTitle: 'Flight 12' }) }));
 jest.mock('../useBroadcast', () => ({
-  useBroadcast: () => ({ broadcast: mockBroadcast, start: jest.fn(async () => false), stop: jest.fn(), confirmStop: jest.fn(), leave: jest.fn(async () => undefined) }),
+  useBroadcast: () => ({ broadcast: mockBroadcast, start: jest.fn(async () => false), stop: jest.fn(), confirmStop: jest.fn(), leave: jest.fn(async () => undefined), retryTelemetry: jest.fn(async () => false) }),
 }));
 jest.mock('../../../../modules/earthscape-live', () => {
   const preset = { width: 1280, height: 720, fps: 30, bitrateKbps: 2500, maxBitrateKbps: 3500, minBitrateKbps: 500 };
