@@ -9,6 +9,9 @@ import { initialsOf } from '@/common/lib/formatTime';
 import { userDisplayName } from '@/features/auth/bootstrap';
 import { logout } from '@/features/auth/authSlice';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
+import { verticalTouchSlop } from '@/common/touchTarget';
+import { edgePadding } from '@/common/layout';
+import { DENSE_MAX_FONT_SCALE, denseText } from '@/common/typography';
 
 /**
  * Mobile take on the web ShellHeader: logo (+ website name) · search bar ·
@@ -49,10 +52,11 @@ export function AppHeader() {
 
   return (
     <View style={[styles.wrap, { paddingTop: insets.top }]}>
-      <View style={styles.row}>
-        <Pressable onPress={() => router.push('/(tabs)' as never)} style={styles.brand} hitSlop={4}>
+      {/* RESP-019: landscape cut-out — the logo and the account button must stay tappable. */}
+      <View style={[styles.row, edgePadding(insets, 12)]}>
+        <Pressable onPress={() => router.push('/(tabs)' as never)} style={styles.brand}>
           <Image source={require('../../../assets/img/ShotoverLogo.png')} style={styles.logo} resizeMode="contain" />
-          <Text style={styles.brandText} numberOfLines={1}>{websiteName}</Text>
+          <Text style={styles.brandText} numberOfLines={1} {...denseText}>{websiteName}</Text>
         </Pressable>
         {searchEnabled && (
           <View style={styles.search}>
@@ -66,17 +70,18 @@ export function AppHeader() {
               onSubmitEditing={submit}
               autoCorrect={false}
               autoCapitalize="none"
+              maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE}
             />
             {q.length > 0 && (
-              <Pressable onPress={() => setQ('')} hitSlop={6}><Icon name="xmark" size={12} color={theme.textTertiary} /></Pressable>
+              <Pressable onPress={() => setQ('')} style={styles.clearBtn} hitSlop={verticalTouchSlop(30)} accessibilityRole="button" accessibilityLabel="Clear search"><Icon name="xmark" size={12} color={theme.textTertiary} /></Pressable>
             )}
-            <Pressable onPress={submit} hitSlop={6} style={styles.searchBtn} accessibilityLabel="Search">
+            <Pressable onPress={submit} hitSlop={verticalTouchSlop(30)} style={styles.searchBtn} accessibilityRole="button" accessibilityLabel="Search">
               <Icon name="magnifying-glass" size={13} color={theme.accent} />
             </Pressable>
           </View>
         )}
-        <Pressable onPress={openAccount} style={[styles.avatar, bootstrap?.cross_org_admin && styles.avatarWarn]} hitSlop={6} accessibilityLabel="Account">
-          {avatar ? <Image source={{ uri: avatar }} style={styles.avatarImg} /> : <Text style={styles.avatarText}>{initialsOf(name)}</Text>}
+        <Pressable onPress={openAccount} style={[styles.avatar, bootstrap?.cross_org_admin && styles.avatarWarn]} hitSlop={6} accessibilityRole="button" accessibilityLabel="Account">
+          {avatar ? <Image source={{ uri: avatar }} style={styles.avatarImg} /> : <Text style={styles.avatarText} {...denseText}>{initialsOf(name)}</Text>}
         </Pressable>
       </View>
     </View>
@@ -85,14 +90,18 @@ export function AppHeader() {
 
 const styles = StyleSheet.create({
   wrap: { backgroundColor: theme.surface, borderBottomWidth: 1, borderBottomColor: theme.border },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, height: 52 },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 150 },
+  // RESP-020: `minHeight`, never `height` — at AX sizes the capped labels still need the room.
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, minHeight: 52 },
+  // UI-022: the content is a 20pt logo — the tappable box has to be stated (the row is 52pt).
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 150, minHeight: 44 },
   logo: { width: 34, height: 20 },
   brandText: { fontSize: 14, fontWeight: '700', color: theme.textPrimary, flexShrink: 1 },
-  search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, height: 36, paddingLeft: 12, paddingRight: 4, borderRadius: theme.radiusPill, backgroundColor: theme.bgSubtle, borderWidth: 1, borderColor: theme.border },
+  search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 36, paddingLeft: 12, paddingRight: 4, borderRadius: theme.radiusPill, backgroundColor: theme.bgSubtle, borderWidth: 1, borderColor: theme.border },
   input: { flex: 1, fontSize: 14, color: theme.textPrimary, paddingVertical: 0 },
-  searchBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surface },
-  avatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.accentTint, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  // UI-024: 6pt from its neighbour inside the pill, so both use vertical-only slop.
+  clearBtn: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
+  searchBtn: { width: 30, height: 30, borderRadius: theme.radiusPill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surface },
+  avatar: { width: 32, height: 32, borderRadius: theme.radiusPill, backgroundColor: theme.accentTint, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   avatarWarn: { borderWidth: 2, borderColor: theme.danger },
   avatarImg: { width: 32, height: 32 },
   avatarText: { fontSize: 12, fontWeight: '700', color: theme.accentActive },

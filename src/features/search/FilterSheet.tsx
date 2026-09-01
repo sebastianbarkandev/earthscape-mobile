@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { theme } from '@/common/theme';
+import { denseText } from '@/common/typography';
+import { BottomSheet } from '@/common/components/BottomSheet';
 import { Icon } from '@/common/components/Icon';
 import { userDisplayName } from '@/features/auth/bootstrap';
 import type { FilterChoices, SearchFilters } from './api';
+import { touchSlop, verticalTouchSlop } from '@/common/touchTarget';
 
 interface Props {
   visible: boolean;
@@ -51,12 +54,10 @@ export function FilterSheet({ visible, choices, value, onApply, onClose }: Props
   const clear = () => onApply({ q: f.q });
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.card} onPress={() => undefined}>
+    <BottomSheet visible={visible} onClose={onClose}>
           <View style={styles.head}>
             <Text style={styles.title}>Filter videos</Text>
-            <Pressable onPress={onClose} hitSlop={8}><Icon name="xmark" size={16} color={theme.textSecondary} /></Pressable>
+            <Pressable onPress={onClose} hitSlop={touchSlop(16)} accessibilityRole="button" accessibilityLabel="Close filters"><Icon name="xmark" size={16} color={theme.textSecondary} /></Pressable>
           </View>
           <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
             <Field label="Title contains">
@@ -100,15 +101,13 @@ export function FilterSheet({ visible, choices, value, onApply, onClose }: Props
             </Field>
           </ScrollView>
           <View style={styles.actions}>
-            <Pressable onPress={clear} style={styles.secondary}><Text style={styles.secondaryText}>Clear all</Text></Pressable>
+            <Pressable hitSlop={touchSlop(40)} onPress={clear} style={styles.secondary}><Text {...denseText} style={styles.secondaryText}>Clear all</Text></Pressable>
             <View style={{ flex: 1 }} />
-            <Pressable onPress={apply} disabled={!timeOk || !datesOk} style={[styles.primary, (!timeOk || !datesOk) && { opacity: 0.5 }]}>
-              <Text style={styles.primaryText}>Apply filters</Text>
+            <Pressable hitSlop={touchSlop(40)} onPress={apply} disabled={!timeOk || !datesOk} style={[styles.primary, (!timeOk || !datesOk) && { opacity: 0.5 }]}>
+              <Text {...denseText} style={styles.primaryText}>Apply filters</Text>
             </Pressable>
           </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }
 
@@ -127,9 +126,9 @@ function Chips<K extends string | number>({ items, selected, onToggle }: { items
       {items.map((it) => {
         const on = selected.includes(it.key);
         return (
-          <Pressable key={String(it.key)} onPress={() => onToggle(it.key)} style={[styles.chip, on && styles.chipOn]} hitSlop={2}>
+          <Pressable key={String(it.key)} onPress={() => onToggle(it.key)} style={[styles.chip, on && styles.chipOn]} hitSlop={verticalTouchSlop(34)}>
             {on && <Icon name="check" size={10} color={theme.accentActive} />}
-            <Text style={[styles.chipText, on && styles.chipTextOn]} numberOfLines={1}>{it.label}</Text>
+            <Text {...denseText} style={[styles.chipText, on && styles.chipTextOn]} numberOfLines={1}>{it.label}</Text>
           </Pressable>
         );
       })}
@@ -138,26 +137,28 @@ function Chips<K extends string | number>({ items, selected, onToggle }: { items
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  card: { backgroundColor: theme.surface, borderTopLeftRadius: theme.radiusLg, borderTopRightRadius: theme.radiusLg, maxHeight: '88%', paddingBottom: 24 },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 },
   title: { fontSize: 17, fontWeight: '700', color: theme.textPrimary },
   body: { paddingHorizontal: 16, gap: 14, paddingBottom: 8 },
   field: { gap: 6 },
   label: { fontSize: 11, fontWeight: '700', color: theme.textTertiary, textTransform: 'uppercase', letterSpacing: 0.4 },
-  input: { height: 38, paddingHorizontal: 12, borderWidth: 1, borderColor: theme.borderStrong, borderRadius: theme.radiusSm, fontSize: 14, color: theme.textPrimary },
+  input: { minHeight: 38, paddingHorizontal: 12, borderWidth: 1, borderColor: theme.borderStrong, borderRadius: theme.radiusSm, fontSize: 14, color: theme.textPrimary },
   invalid: { borderColor: theme.danger },
   pair: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   half: { flex: 1 },
   to: { fontSize: 12, color: theme.textTertiary },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 30, paddingHorizontal: 10, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border, maxWidth: '100%' },
+  // UI-028: a WRAPPING row — the neighbour below is a VERTICAL one, so the 5pt slop of a
+  // 34pt box needs a rowGap of at least 10 (a 24pt box needed 10pt/side and overlapped the
+  // line above by 14pt). rowGap only applies BETWEEN wrapped lines, so the dense single-line
+  // case is unchanged.
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, rowGap: 10 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 34, paddingHorizontal: 10, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border, maxWidth: '100%' },
   chipOn: { backgroundColor: theme.accentTint, borderColor: theme.accent },
   chipText: { fontSize: 12, color: theme.textSecondary, fontWeight: '600' },
   chipTextOn: { color: theme.accentActive },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: 1, borderTopColor: theme.border },
-  primary: { height: 40, paddingHorizontal: 18, borderRadius: theme.radiusPill, backgroundColor: theme.accent, alignItems: 'center', justifyContent: 'center' },
+  primary: { minHeight: 40, paddingHorizontal: 18, borderRadius: theme.radiusPill, backgroundColor: theme.accent, alignItems: 'center', justifyContent: 'center' },
   primaryText: { color: theme.textOnAccent, fontWeight: '700', fontSize: 13 },
-  secondary: { height: 40, paddingHorizontal: 14, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center' },
+  secondary: { minHeight: 40, paddingHorizontal: 14, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center' },
   secondaryText: { color: theme.textPrimary, fontWeight: '600', fontSize: 13 },
 });

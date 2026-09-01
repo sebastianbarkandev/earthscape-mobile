@@ -1,4 +1,4 @@
-import { clampZoom, createGeometry, isFullWindow, panWindow, pinchWindow, transformFor } from '../geometry';
+import { clampToCanvas, clampZoom, createGeometry, isFullWindow, labelPlacement, labelWidth, panWindow, pinchWindow, transformFor } from '../geometry';
 
 const b = { start: 1000, end: 1100, duration: 100 };
 
@@ -76,5 +76,39 @@ describe('isFullWindow', () => {
   it('detects the full extent', () => {
     expect(isFullWindow({ left: 1000, right: 1100 }, b)).toBe(true);
     expect(isFullWindow({ left: 1001, right: 1100 }, b)).toBe(false);
+  });
+});
+
+describe('labelPlacement / clampToCanvas (UI-016)', () => {
+  it('anchors the label to the right of the marker when it fits', () => {
+    expect(labelPlacement(100, 400, '1:23', 10)).toEqual({ x: 104, anchor: 'start' });
+  });
+  it('flips it to the left at the right edge — where a live playhead lives', () => {
+    // width 300, x 298, "12:34:56" ~ 48pt: start-anchored it would be cut off.
+    const p = labelPlacement(298, 300, '12:34:56', 10);
+    expect(p.anchor).toBe('end');
+    expect(p.x).toBe(294);
+    expect(p.x - labelWidth('12:34:56', 10)).toBeGreaterThanOrEqual(0);
+  });
+  it('keeps the label inside the canvas even when neither side fits', () => {
+    const p = labelPlacement(10, 20, '12:34:56', 10);
+    expect(p.anchor).toBe('end');
+    expect(p.x).toBeLessThanOrEqual(20);
+    expect(p.x).toBeGreaterThan(0);
+  });
+  it('a label at the very left stays start-anchored', () => {
+    expect(labelPlacement(0, 400, '0:00', 10)).toEqual({ x: 4, anchor: 'start' });
+  });
+  it('labelWidth grows with the text and the font size', () => {
+    expect(labelWidth('', 10)).toBe(0);
+    expect(labelWidth('0:00', 10)).toBeCloseTo(24);
+    expect(labelWidth('0:00', 20)).toBeCloseTo(48);
+  });
+  it('clampToCanvas keeps a grip fully inside the drawing area', () => {
+    expect(clampToCanvas(0, 300, 2.5)).toBe(2.5);
+    expect(clampToCanvas(300, 300, 2.5)).toBe(297.5);
+    expect(clampToCanvas(150, 300, 2.5)).toBe(150);
+    expect(clampToCanvas(NaN, 300, 2.5)).toBe(2.5);
+    expect(clampToCanvas(5, 0, 2.5)).toBe(2.5); // canvas not measured yet
   });
 });

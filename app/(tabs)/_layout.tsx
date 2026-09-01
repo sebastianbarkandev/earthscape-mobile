@@ -4,6 +4,7 @@ import { useAppSelector } from '@/store/hooks';
 import { theme } from '@/common/theme';
 import { AppHeader } from '@/common/components/AppHeader';
 import { Icon, type IconName } from '@/common/components/Icon';
+import { TabLabel } from '@/common/components/TabLabel';
 
 function TabIcon({ name, color }: { name: IconName; color: string }) {
   return <Icon name={name} size={18} color={color} />;
@@ -27,7 +28,7 @@ export default function TabsLayout() {
         tabBarActiveTintColor: theme.accent,
         tabBarInactiveTintColor: theme.textTertiary,
         tabBarStyle: { backgroundColor: theme.surface, borderTopColor: theme.border },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+        tabBarLabel: ({ color, children }) => <TabLabel color={color}>{children}</TabLabel>,
       }}
     >
       <Tabs.Screen

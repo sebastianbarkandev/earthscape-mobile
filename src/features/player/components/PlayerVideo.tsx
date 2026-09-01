@@ -1,7 +1,9 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { theme } from '@/common/theme';
+import { shouldAutoplay } from '../autoplay';
+import { useLivePlaylistRetry } from '../hooks/useLivePlaylistRetry';
 
 export interface PlayerVideoHandle {
   enterFullscreen(): void;
@@ -34,6 +36,12 @@ interface Props {
   onPlayToEnd?: () => void;
   /** One-shot seek command ({videoTime, nonce}); nonce change triggers the seek. */
   seek: { videoTime: number; nonce: number } | null;
+  /**
+   * The source is a live playlist (`live_stream_state === 'live'`). LIVE-028: it 404s until the
+   * live server has produced a first segment, so this player needs the same status surface +
+   * bounded reload the program tiles have — the URL never changes when the segments appear.
+   */
+  isLive?: boolean;
   /** Overlay (custom controls) rendered above the video surface. */
   children?: React.ReactNode;
 }
@@ -44,13 +52,35 @@ interface Props {
  * paused/rate/muted; Redux mirrors it via the events below.
  */
 export const PlayerVideo = forwardRef<PlayerVideoHandle, Props>(function PlayerVideo(
-  { sourceUri, onTimeUpdate, onPlayingChange, onRateChange, onMutedChange, onPlayToEnd, seek, children },
+  { sourceUri, onTimeUpdate, onPlayingChange, onRateChange, onMutedChange, onPlayToEnd, seek, isLive = false, children },
   ref,
 ) {
   const viewRef = useRef<VideoView>(null);
+  // LIVE-029: `useVideoPlayer` re-creates the player (and re-runs this setup) on every sourceUri
+  // change, and mid-view the source DOES change — `hls_stream_url` flips from
+  // `/live/{id}/playlist.m3u8` to the recorded HLS as soon as the transcode lands, which is
+  // precisely what the heartbeat and the 20s refresh exist to pick up. Nothing else re-applies the
+  // viewer's intent to the new instance (the store deliberately never drives the player), so the
+  // intent is kept HERE, written only by the imperative commands below — never by `playingChange`,
+  // which also reports `false` for buffering. `shouldAutoplay` additionally keeps the new player
+  // silent while the camera owns the audio session (LIVE-020/026: an unmuted auto-play behind
+  // /golive is captured into the published AAC track as an echo of the primary).
+  const intent = useRef({ paused: false, muted: false, rate: 1 });
   const player = useVideoPlayer(sourceUri, (p) => {
     p.timeUpdateEventInterval = 0.5;
-    p.play();
+    p.muted = intent.current.muted;
+    p.playbackRate = intent.current.rate;
+    if (shouldAutoplay(intent.current.paused)) p.play();
+  });
+  // Same status surface + bounded 10s reload as a ProgramStrip tile (shared hook, LIVE-028):
+  // without it, swapping the primary to a phone that is still connecting left the viewport black
+  // forever — AVPlayerItem fails the load once and the unchanged source string never re-creates it.
+  // The hook itself refuses to reload while the camera owns the audio session (LIVE-033/REG-002:
+  // this player is behind /golive then, and 30 playlist fetches would compete with the SRT uplink).
+  const { connecting, exhausted, retry } = useLivePlaylistRetry(player, {
+    source: sourceUri,
+    isLive,
+    canPlay: () => shouldAutoplay(intent.current.paused),
   });
 
   useEffect(() => {
@@ -98,13 +128,24 @@ export const PlayerVideo = forwardRef<PlayerVideoHandle, Props>(function PlayerV
       enterFullscreen: () => {
         viewRef.current?.enterFullscreen().catch(() => undefined);
       },
-      play: () => player.play(),
-      pause: () => player.pause(),
-      togglePlay: () => (player.playing ? player.pause() : player.play()),
+      play: () => {
+        intent.current.paused = false;
+        player.play();
+      },
+      pause: () => {
+        intent.current.paused = true;
+        player.pause();
+      },
+      togglePlay: () => {
+        intent.current.paused = player.playing;
+        return player.playing ? player.pause() : player.play();
+      },
       setRate: (r) => {
+        intent.current.rate = r;
         player.playbackRate = r;
       },
       setMuted: (m) => {
+        intent.current.muted = m;
         player.muted = m;
       },
       seekBy: (s) => player.seekBy(s),
@@ -126,7 +167,25 @@ export const PlayerVideo = forwardRef<PlayerVideoHandle, Props>(function PlayerV
         nativeControls={false}
         contentFit="contain"
       />
+      {connecting && !exhausted && (
+        <View style={styles.connecting} pointerEvents="none">
+          <Text style={styles.connectingText}>Connecting…</Text>
+        </View>
+      )}
       {children}
+      {/* LIVE-035: the bounded retry is spent (~5 min). Keeping "Connecting…" up for a player that
+          has stopped trying is a lie, and nothing re-arms it by itself — a live program's playlist
+          URL never changes, so neither the 20s refreshEvent nor `useVideoPlayer` re-keys. Rendered
+          AFTER `children` because this one must be TAPPABLE: PlayerControls' root is an
+          absoluteFill Pressable that would swallow the tap. `box-none` leaves everything but the
+          pill transparent to touches, and the transport bar sits at the bottom, clear of it. */}
+      {exhausted && (
+        <View style={styles.connecting} pointerEvents="box-none">
+          <Pressable onPress={retry} accessibilityRole="button" accessibilityLabel="Retry connecting" style={styles.retry}>
+            <Text style={styles.connectingText}>Still connecting — tap to retry</Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 });
@@ -136,4 +195,8 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.videoBg,
   },
+  // Behind the controls overlay (rendered after it) and never touchable, so it cannot swallow taps.
+  connecting: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  connectingText: { color: theme.overlayText, fontSize: 13, fontWeight: '600' },
+  retry: { paddingHorizontal: 16, minHeight: 44, justifyContent: 'center', borderRadius: theme.radiusPill, backgroundColor: theme.overlayControl },
 });

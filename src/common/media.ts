@@ -34,9 +34,20 @@ export interface DownloadResult {
   headers: Record<string, string>;
 }
 
+/**
+ * Server-supplied names (e.g. the screenshot response's `filename`) become a path
+ * inside the cache directory, so strip directories and anything but [\w.-]
+ * (SEC-007). Never empty, never `.`/`..`, capped at 100 chars.
+ */
+export function safeFilename(filename: string | null | undefined, fallback = 'download.bin'): string {
+  const base = (filename ?? '').split(/[\\/]/).pop() ?? '';
+  const clean = base.replace(/[^\w.-]+/g, '_').replace(/^\.+/, '').slice(0, 100);
+  return clean || fallback;
+}
+
 export async function downloadToCache(url: string, filename: string): Promise<DownloadResult> {
   const dir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? '';
-  const target = `${dir}${filename}`;
+  const target = `${dir}${safeFilename(filename)}`;
   const res = await FileSystem.downloadAsync(url, target);
   return { uri: res.uri, status: res.status, headers: res.headers ?? {} };
 }

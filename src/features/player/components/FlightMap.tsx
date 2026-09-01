@@ -1,24 +1,33 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import MapView, { Circle, Marker, Polygon, Polyline, type LatLng } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { theme } from '@/common/theme';
 import { Icon } from '@/common/components/Icon';
 import { getClosestPointValueOrNull, getLastValueOrNull } from '@/common/lib/timeSeries';
 import { calculateHeatMap } from '@/common/lib/calculateHeatMap';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
+import { motionDuration, useReduceMotion } from '@/common/hooks/useReduceMotion';
+import { denseText } from '@/common/typography';
 import type { FlightData, DrawnObject } from '../api';
 import { setMapFollow, type MapFollow } from '../playerSlice';
 import { MapLayersSheet } from './MapLayersSheet';
 
+const FIT_PADDING = { top: 50, bottom: 50, left: 50, right: 50 };
+const CAMERA_MS = 300;
+
 interface Props {
   mapData: Pick<FlightData, 'loc' | 'target' | 'footprint' | 'acft_hdg'>;
-  /** Current playback position in UTC epoch seconds (via TimeMapper). */
-  currentUtc: number | null;
   /** Live + following: pin to the latest point regardless of playback time. */
   followLatest: boolean;
   drawnObjects?: DrawnObject[];
   /** Web platform.type (vehicle-type tag; default 'helicopter') — labels the follow control. */
   platformType?: string;
+  /**
+   * Caption naming whose track this is. Multi-program: flight_data.json serves the PRIMARY's
+   * track for every video id, so while a phone program is active the map says so (programTrackLabel).
+   */
+  trackLabel?: string | null;
 }
 
 const toLatLng = (pair: [number, number] | null | undefined): LatLng | null =>
@@ -32,10 +41,18 @@ const toLatLng = (pair: [number, number] | null | undefined): LatLng | null =>
  * plus the web's follow ("center on") control, layer toggles, and drawn objects.
  * Series values arrive [lat, lon] (backend ST_FlipCoordinates).
  */
-export function FlightMap({ mapData, currentUtc, followLatest, drawnObjects = [], platformType = 'helicopter' }: Props) {
+export function FlightMap({ mapData, followLatest, drawnObjects = [], platformType = 'helicopter', trackLabel = null }: Props) {
   const dispatch = useAppDispatch();
+  // Playback position (UTC, via TimeMapper) is read HERE so the 2 Hz clock only re-renders the map (RESP-002).
+  const currentUtc = useAppSelector((s) => s.player.time.currentUtc);
+  // RESP-019: the map's own controls hug the pane edge, which in landscape is the cut-out strip.
+  const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
-  const fitted = useRef(false);
+  /** Pane size the path was last fitted for (null = never fitted). Rotation / layout change → refit (RESP-015). */
+  const fittedFor = useRef<string | null>(null);
+  const [pane, setPane] = useState<{ w: number; h: number } | null>(null);
+  const reduceMotion = useReduceMotion();
+  const cameraMs = motionDuration(reduceMotion, CAMERA_MS);
   const [layersOpen, setLayersOpen] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(10);
   const toggles = useAppSelector((s) => s.player.toggles);
@@ -94,29 +111,35 @@ export function FlightMap({ mapData, currentUtc, followLatest, drawnObjects = []
     ? (footprintRing.map(toLatLng).filter(Boolean) as LatLng[])
     : [];
 
-  // Fit to path once, when the first flight points land (web: fitBounds on bounding_box).
+  // Fit to path once, when the first flight points land (web: fitBounds on bounding_box)…
+  const paneKey = pane ? `${pane.w}x${pane.h}` : null;
   useEffect(() => {
-    if (!fitted.current && pathCoords.length > 1 && mapRef.current) {
-      fitted.current = true;
-      mapRef.current.fitToCoordinates(pathCoords, {
-        edgePadding: { top: 50, bottom: 50, left: 50, right: 50 },
-        animated: false,
-      });
+    if (fittedFor.current == null && pathCoords.length > 1 && mapRef.current) {
+      fittedFor.current = paneKey ?? 'unsized';
+      mapRef.current.fitToCoordinates(pathCoords, { edgePadding: FIT_PADDING, animated: false });
     }
-  }, [pathCoords]);
+  }, [pathCoords]); // eslint-disable-line react-hooks/exhaustive-deps
+  // …and again when the pane's aspect changes (rotation, Video/Split/Map switch) while free-panning;
+  // a following camera is re-centred every tick anyway (RESP-015).
+  useEffect(() => {
+    if (!paneKey || fittedFor.current == null || fittedFor.current === paneKey) return;
+    if (follow !== 'none' || pathCoords.length < 2 || !mapRef.current) return;
+    fittedFor.current = paneKey;
+    mapRef.current.fitToCoordinates(pathCoords, { edgePadding: FIT_PADDING, animated: false });
+  }, [paneKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Follow mode (web Map.jsx:718-724): 'fov' pans to the target, anything else to the aircraft.
   const followTarget = follow === 'fov' ? targetCoord : follow === 'vehicle' ? aircraftCoord : null;
   useEffect(() => {
     if (followTarget && mapRef.current) {
-      mapRef.current.animateCamera({ center: followTarget }, { duration: 300 });
+      mapRef.current.animateCamera({ center: followTarget }, { duration: cameraMs });
     }
   }, [followTarget?.latitude, followTarget?.longitude]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // One-shot pan from an event card / drawn object (web setFocusCoordinates).
   useEffect(() => {
     if (focus && mapRef.current) {
-      mapRef.current.animateCamera({ center: { latitude: focus.lat, longitude: focus.lon } }, { duration: 300 });
+      mapRef.current.animateCamera({ center: { latitude: focus.lat, longitude: focus.lon } }, { duration: cameraMs });
     }
   }, [focus?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -130,7 +153,14 @@ export function FlightMap({ mapData, currentUtc, followLatest, drawnObjects = []
   const heatRadius = zoomLevel <= 6 ? 400 : zoomLevel <= 10 ? 120 : 40; // metres, mirrors leaflet radius ladder
 
   return (
-    <View style={StyleSheet.absoluteFill}>
+    <View
+      style={StyleSheet.absoluteFill}
+      testID="flight-map-pane"
+      onLayout={(e) => {
+        const { width: w, height: h } = e.nativeEvent.layout;
+        setPane((prev) => (prev && prev.w === Math.round(w) && prev.h === Math.round(h) ? prev : { w: Math.round(w), h: Math.round(h) }));
+      }}
+    >
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
@@ -176,23 +206,34 @@ export function FlightMap({ mapData, currentUtc, followLatest, drawnObjects = []
             tracksViewChanges={false}
           >
             <View style={styles.aircraft}>
-              <Text style={styles.aircraftGlyph}>▲</Text>
+              <Text style={styles.aircraftGlyph} allowFontScaling={false}>▲</Text>
             </View>
           </Marker>
         )}
       </MapView>
 
       {toggles.overlays && (
-        <View style={styles.controls} pointerEvents="box-none">
-          <Pressable style={styles.ctl} onPress={() => setLayersOpen(true)} hitSlop={6}>
+        <View style={[styles.controls, { right: Math.max(8, insets.right) }]} pointerEvents="box-none">
+          <Pressable style={styles.ctl} onPress={() => setLayersOpen(true)} accessibilityRole="button" accessibilityLabel="Map layers">
             <Icon name="layer-group" size={14} color={theme.textPrimary} />
           </Pressable>
-          <Pressable style={[styles.ctl, follow !== 'none' && styles.ctlActive]} onPress={cycleFollow} hitSlop={6}>
+          <Pressable
+            style={[styles.ctl, follow !== 'none' && styles.ctlActive]}
+            onPress={cycleFollow}
+            accessibilityRole="button"
+            accessibilityLabel={`Follow: ${followLabel}`}
+            accessibilityHint="Cycles between free pan, the aircraft and the camera target"
+          >
             <Icon name="location-crosshairs" size={14} color={follow !== 'none' ? theme.textOnAccent : theme.textPrimary} />
-            <Text style={[styles.ctlText, follow !== 'none' && { color: theme.textOnAccent }]}>{followLabel}</Text>
+            <Text style={[styles.ctlText, follow !== 'none' && { color: theme.textOnAccent }]} {...denseText}>{followLabel}</Text>
           </Pressable>
         </View>
       )}
+      {trackLabel ? (
+        <View style={[styles.trackLabel, { left: Math.max(8, insets.left) }]} pointerEvents="none">
+          <Text style={styles.trackLabelText} numberOfLines={1}>{trackLabel}</Text>
+        </View>
+      ) : null}
       <MapLayersSheet visible={layersOpen} onClose={() => setLayersOpen(false)} hasTarget={hasTarget} hasDrawings={drawnObjects.length > 0} />
     </View>
   );
@@ -237,9 +278,13 @@ function DrawnObjectShape({ obj }: { obj: DrawnObject }) {
 
 const styles = StyleSheet.create({
   aircraft: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
-  aircraftGlyph: { fontSize: 22, color: theme.accent, textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 3 },
+  aircraftGlyph: { fontSize: 22, color: theme.accent, textShadowColor: theme.overlayShadow, textShadowRadius: 3 },
   controls: { position: 'absolute', top: 8, right: 8, gap: 6, alignItems: 'flex-end' },
-  ctl: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 34, height: 34, paddingHorizontal: 9, borderRadius: theme.radiusPill, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border },
+  // UI-024: stacked 6pt apart, so a slop-grown 34pt button reached into its neighbour —
+  // these get their 44pt from real height instead.
+  ctl: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 44, minHeight: 44, paddingHorizontal: 9, borderRadius: theme.radiusPill, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border },
   ctlActive: { backgroundColor: theme.accent, borderColor: theme.accent },
   ctlText: { fontSize: 11, fontWeight: '700', color: theme.textPrimary, textTransform: 'capitalize' },
+  trackLabel: { position: 'absolute', left: 8, bottom: 8, maxWidth: '70%', paddingHorizontal: 9, paddingVertical: 4, borderRadius: theme.radiusPill, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border },
+  trackLabelText: { fontSize: 11, fontWeight: '600', color: theme.textSecondary },
 });

@@ -1,8 +1,10 @@
 import React from 'react';
-import { Modal, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { theme } from '@/common/theme';
+import { BottomSheet } from '@/common/components/BottomSheet';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { setMapType, toggleMapOption, type MapType } from '../playerSlice';
+import { touchSlop } from '@/common/touchTarget';
 
 interface Props {
   visible: boolean;
@@ -27,12 +29,15 @@ export function MapLayersSheet({ visible, onClose, hasTarget, hasDrawings }: Pro
   ];
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.card} onPress={() => undefined}>
+    <BottomSheet visible={visible} onClose={onClose} animationType="fade" cardStyle={styles.card}>
+      {/* REG-003: BottomSheet caps the card at 0.88 x window height. A landscape iPhone window
+          is ~393pt and this sheet's content is 393-531pt, so without a scroll region the
+          overlay toggles and "Done" render below the screen edge and cannot be reached at all
+          (the card is bottom-anchored). Every other sheet keeps a ScrollView for the same reason. */}
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
           <Text style={styles.heading}>Base map</Text>
           {bases.map((b) => (
-            <Pressable key={b.key} style={styles.row} onPress={() => dispatch(setMapType(b.key))}>
+            <Pressable hitSlop={touchSlop(40)} key={b.key} style={styles.row} onPress={() => dispatch(setMapType(b.key))}>
               <View style={[styles.radio, mapType === b.key && styles.radioOn]} />
               <Text style={styles.label}>{b.label}</Text>
             </Pressable>
@@ -46,9 +51,8 @@ export function MapLayersSheet({ visible, onClose, hasTarget, hasDrawings }: Pro
           <Pressable onPress={onClose} style={styles.done}>
             <Text style={styles.doneText}>Done</Text>
           </Pressable>
-        </Pressable>
-      </Pressable>
-    </Modal>
+      </ScrollView>
+    </BottomSheet>
   );
 }
 
@@ -62,13 +66,15 @@ function Row({ label, value, onChange }: { label: string; value: boolean; onChan
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  card: { backgroundColor: theme.surface, borderTopLeftRadius: theme.radiusLg, borderTopRightRadius: theme.radiusLg, padding: 20, paddingBottom: 32, gap: 6 },
+  card: { padding: 20 },
+  // The rows' own gap moved here with them: the card now lays out one child (the ScrollView).
+  body: { gap: 6 },
   heading: { fontSize: 12, fontWeight: '700', color: theme.textTertiary, textTransform: 'uppercase', letterSpacing: 0.5 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 40 },
-  radio: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: theme.borderStrong },
+  radio: { width: 18, height: 18, borderRadius: theme.radiusPill, borderWidth: 2, borderColor: theme.borderStrong },
   radioOn: { borderColor: theme.accent, backgroundColor: theme.accent },
   label: { fontSize: 15, color: theme.textPrimary },
-  done: { marginTop: 12, alignSelf: 'flex-end', paddingHorizontal: 18, paddingVertical: 10, borderRadius: theme.radiusPill, backgroundColor: theme.accent },
+  // UI-022: ~37pt from padding + the default font size; state the 44pt box.
+  done: { marginTop: 12, alignSelf: 'flex-end', minHeight: 44, justifyContent: 'center', paddingHorizontal: 18, borderRadius: theme.radiusPill, backgroundColor: theme.accent },
   doneText: { color: theme.textOnAccent, fontWeight: '700' },
 });

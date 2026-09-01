@@ -45,9 +45,16 @@ export function createMobileStream(body: CreateStreamBody) {
   return api<MobileStream>('/api/v1/live/streams', { method: 'POST', body });
 }
 
+/**
+ * REG-008: this is the poll the "wait for the SRT listener" gate and the 4 s status loop run on,
+ * so a stalled request is what makes Go Live sit on "Ready" with no error. Bounded well under the
+ * gate's 20 s budget; a timed-out poll is just "not yet".
+ */
+const STATUS_POLL_TIMEOUT_MS = 8000;
+
 export function getMobileStream(id: number, latencyMs?: number) {
   const q = latencyMs ? `?latency_ms=${latencyMs}` : '';
-  return api<MobileStream>(`/api/v1/live/streams/${id}${q}`);
+  return api<MobileStream>(`/api/v1/live/streams/${id}${q}`, { timeoutMs: STATUS_POLL_TIMEOUT_MS });
 }
 
 export function endMobileStream(id: number) {

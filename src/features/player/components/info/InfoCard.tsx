@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { theme } from '@/common/theme';
+import { denseText } from '@/common/typography';
 import { Icon } from '@/common/components/Icon';
 import { TextPromptModal } from '@/common/components/TextPromptModal';
 import { formatDate } from '@/common/lib/formatTime';
@@ -9,6 +10,7 @@ import { getTags, getTails, postCreateTag, type EventTag, type EventVideo, type 
 import { updateEventInfo, updateTail } from '../../eventThunks';
 import { PublicShareTab } from '../share/PublicShareTab';
 import type { VideoCapabilities } from '../../videoCapabilities';
+import { touchSlop, verticalTouchSlop } from '@/common/touchTarget';
 
 interface Props {
   video: EventVideo;
@@ -39,8 +41,8 @@ export function InfoCard({ video, caps }: Props) {
 
 function Tab({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={[styles.tab, on && styles.tabOn]} hitSlop={4}>
-      <Text style={[styles.tabText, on && styles.tabTextOn]}>{label}</Text>
+    <Pressable onPress={onPress} style={[styles.tab, on && styles.tabOn]} hitSlop={verticalTouchSlop(32)}>
+      <Text {...denseText} style={[styles.tabText, on && styles.tabTextOn]}>{label}</Text>
     </Pressable>
   );
 }
@@ -99,7 +101,7 @@ function Details({ video, caps }: Props) {
         <View style={styles.sectionHead}>
           <Text style={styles.label}>Description</Text>
           {caps.canEdit && (
-            <Pressable onPress={() => setEditDesc(true)} hitSlop={6}><Icon name="pen" size={11} color={theme.textSecondary} /></Pressable>
+            <Pressable onPress={() => setEditDesc(true)} hitSlop={touchSlop(11)} accessibilityRole="button" accessibilityLabel="Edit description"><Icon name="pen" size={11} color={theme.textSecondary} /></Pressable>
           )}
         </View>
         <Text style={styles.desc}>{plainText(video.description) || 'No description'}</Text>
@@ -110,16 +112,16 @@ function Details({ video, caps }: Props) {
           <View style={styles.sectionHead}>
             <Text style={styles.label}>Tags</Text>
             {caps.canEdit && (
-              <Pressable onPress={() => setTagPicker(true)} hitSlop={6}><Icon name="plus" size={11} color={theme.textSecondary} /></Pressable>
+              <Pressable onPress={() => setTagPicker(true)} hitSlop={touchSlop(11)} accessibilityRole="button" accessibilityLabel="Add tag"><Icon name="plus" size={11} color={theme.textSecondary} /></Pressable>
             )}
           </View>
           <View style={styles.chips}>
             {tags.length === 0 && <Text style={styles.muted}>No tags</Text>}
             {tags.map((t, i) => (
               <View key={`${t.tag?.id ?? 'x'}-${t.value}-${i}`} style={styles.tagChip}>
-                <Text style={styles.tagText}>{t.tag?.title ? `${t.tag.title}: ` : ''}{t.value}</Text>
+                <Text style={styles.tagText} numberOfLines={2}>{t.tag?.title ? `${t.tag.title}: ` : ''}{t.value}</Text>
                 {caps.canDeleteTags && (
-                  <Pressable onPress={() => removeTag(t)} hitSlop={6}><Icon name="xmark" size={10} color={theme.textSecondary} /></Pressable>
+                  <Pressable onPress={() => removeTag(t)} hitSlop={touchSlop(10)} accessibilityRole="button" accessibilityLabel={`Remove tag ${t.tag?.title ? `${t.tag.title}: ` : ''}${t.value}`}><Icon name="xmark" size={10} color={theme.textSecondary} /></Pressable>
                 )}
               </View>
             ))}
@@ -191,7 +193,7 @@ function Row({ label, value, onEdit }: { label: string; value: string; onEdit?: 
     <View style={styles.row}>
       <Text style={styles.label}>{label}</Text>
       <Text style={styles.value} numberOfLines={2}>{value}</Text>
-      {onEdit && <Pressable onPress={onEdit} hitSlop={6}><Icon name="pen" size={11} color={theme.textSecondary} /></Pressable>}
+      {onEdit && <Pressable onPress={onEdit} hitSlop={touchSlop(11)} accessibilityRole="button" accessibilityLabel={`Edit ${label.toLowerCase()}`}><Icon name="pen" size={11} color={theme.textSecondary} /></Pressable>}
     </View>
   );
 }
@@ -199,7 +201,9 @@ function Row({ label, value, onEdit }: { label: string; value: string; onEdit?: 
 const styles = StyleSheet.create({
   card: { backgroundColor: theme.surface, marginTop: 8, borderTopWidth: 1, borderBottomWidth: 1, borderColor: theme.border },
   tabs: { flexDirection: 'row', gap: 4, paddingHorizontal: 12, paddingTop: 8 },
-  tab: { paddingHorizontal: 12, height: 32, justifyContent: 'center', borderRadius: theme.radiusPill },
+  // UI-024: vertical-only slop — a symmetric one put "Sharing"'s hit rect 2pt inside the
+  // "Details" tab (gap 4), and RN resolves an overlap to the LAST sibling written.
+  tab: { paddingHorizontal: 12, minHeight: 32, justifyContent: 'center', borderRadius: theme.radiusPill },
   tabOn: { backgroundColor: theme.accentTint },
   tabText: { fontSize: 12, fontWeight: '600', color: theme.textSecondary },
   tabTextOn: { color: theme.accentActive },
@@ -211,7 +215,9 @@ const styles = StyleSheet.create({
   sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   desc: { fontSize: 13, color: theme.textPrimary, lineHeight: 19 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  tagChip: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 26, paddingHorizontal: 9, borderRadius: theme.radiusPill, backgroundColor: theme.bgSubtle, borderWidth: 1, borderColor: theme.border },
-  tagText: { fontSize: 12, color: theme.textPrimary },
+  // UI-006: minHeight (not height) + flexShrink so a long "Case number: 2026-…" value
+  // wraps its chip to one row of the flexWrap container instead of spilling out of a 26pt box.
+  tagChip: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 26, paddingVertical: 3, paddingHorizontal: 9, borderRadius: theme.radiusPill, backgroundColor: theme.bgSubtle, borderWidth: 1, borderColor: theme.border, flexShrink: 1, maxWidth: '100%' },
+  tagText: { fontSize: 12, color: theme.textPrimary, flexShrink: 1 },
   muted: { fontSize: 12, color: theme.textTertiary },
 });

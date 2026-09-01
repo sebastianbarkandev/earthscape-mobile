@@ -1,6 +1,7 @@
 import type { PayloadAction } from '@reduxjs/toolkit';
 import type { PlayerState } from '../playerSlice';
 import { clampZoom, isFullWindow, panWindow as panWin } from './geometry';
+import { extentOf } from './liveExtent';
 
 /**
  * Timeline case reducers spread into playerSlice (they need state.time for the
@@ -30,10 +31,10 @@ export const initialTimelineState: TimelineState = {
   tool: 'scrub',
 };
 
+/** Same extent the canvas draws (liveExtent.ts): while live it follows the live edge (LIVE-022),
+ *  otherwise the naive 1 s range would clamp every pinch/pan back into a degenerate window. */
 function bounds(state: PlayerState) {
-  const start = state.time.start ?? 0;
-  const end = state.time.end ?? start + 1;
-  return { start, end, duration: state.time.duration ?? Math.max(0, end - start) };
+  return extentOf(state);
 }
 
 export const timelineReducers = {

@@ -1,4 +1,5 @@
 import { createSelector } from '@reduxjs/toolkit';
+import { theme } from '@/common/theme';
 import type { FlightPointFieldMeta } from '@/common/lib/formatFlightPointValue';
 import type { FieldsStructure } from '@/features/auth/bootstrap';
 import type { Bootstrap } from '@/features/auth/bootstrap';
@@ -6,28 +7,30 @@ import type { GraphState } from '../graphSlice';
 import type { PlayerState } from '../playerSlice';
 import { segmentsFromSeries } from './sensorBands';
 import { sortedByStart } from './clipmarkUtils';
+import { extentFrom, liveEdgeOf } from './liveExtent';
 
 type S = { player: PlayerState; graph: GraphState; auth: { bootstrap: Bootstrap | null } };
+
+/**
+ * LIVE-022: while live the extent follows the live edge (timeline/liveExtent.ts). The edge is
+ * quantized, so the 2 Hz playhead does not hand these selectors a new value on every tick.
+ */
+const selectExtent = createSelector(
+  (s: S) => s.player.time.start,
+  (s: S) => s.player.time.end,
+  (s: S) => s.player.time.duration,
+  (s: S) => liveEdgeOf(s.player),
+  extentFrom,
+);
 
 /** Zoom window; `null` in state means "follow the full extent" (grows while live). */
 export const selectTimeWindow = createSelector(
   (s: S) => s.player.timeline.window,
-  (s: S) => s.player.time.start,
-  (s: S) => s.player.time.end,
-  (win, start, end) => {
-    if (win) return win;
-    const l = start ?? 0;
-    const r = end != null && end > l ? end : l + 1;
-    return { left: l, right: r };
-  },
+  selectExtent,
+  (win, extent) => (win ? win : { left: extent.start, right: Math.max(extent.end, extent.start + 1) }),
 );
 
-export const selectBounds = createSelector(
-  (s: S) => s.player.time.start,
-  (s: S) => s.player.time.end,
-  (s: S) => s.player.time.duration,
-  (start, end, duration) => ({ start: start ?? 0, end: end ?? (start ?? 0) + 1, duration: duration ?? Math.max(0, (end ?? 0) - (start ?? 0)) }),
-);
+export const selectBounds = selectExtent;
 
 export const selectFieldsStructure = (s: S): FieldsStructure =>
   s.auth.bootstrap?.settings?.displayed_flight_point_fields_structure ?? {};
@@ -74,8 +77,8 @@ export const selectActiveSeries = createSelector(
       for (const name of active[category]) {
         const series = data[category]?.[name];
         if (!series) continue;
-        const meta = structure[category]?.[name] ?? { color: '#cc0000' };
-        out.push({ key: `${category}/${name}`, category, name, series, meta: { ...meta, color: meta.color ?? '#cc0000' } });
+        const meta = structure[category]?.[name] ?? { color: theme.graphDefault };
+        out.push({ key: `${category}/${name}`, category, name, series, meta: { ...meta, color: meta.color ?? theme.graphDefault } });
       }
     }
     return out;

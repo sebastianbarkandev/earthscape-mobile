@@ -5,13 +5,17 @@ import { formatTime } from '@/common/lib/formatTime';
 import type { Clipmark } from '../../api';
 import { BAND_HEIGHT_RATIO, BAND_MAX_H, BAND_MIN_H, BAND_TOP_RATIO, EDGE_WIDTH } from '../../timeline/constants';
 import { buildDataLinePath } from '../../timeline/dataLinePath';
-import { createGeometry, type Geometry } from '../../timeline/geometry';
+import { clampToCanvas, createGeometry, labelPlacement, type Geometry } from '../../timeline/geometry';
 import type { ActiveSeries } from '../../timeline/selectors';
 import { sensorColor, type SensorSegment } from '../../timeline/sensorBands';
 import { computeTicks } from '../../timeline/tickMarkers';
 import { isSystemGenerated, timelineGlyph } from '../../timeline/clipmarkUtils';
 
 /** Memoized SVG layers. Props are plain values so React.memo actually short-circuits. */
+
+/** Axis tick label size, and the 'LP' plate's — `labelPlacement` needs the real value. */
+export const TICK_FONT_SIZE = 10;
+const PLATE_FONT_SIZE = 9;
 
 export function bandGeometry(height: number) {
   const h = Math.min(BAND_MAX_H, Math.max(BAND_MIN_H, height * BAND_HEIGHT_RATIO));
@@ -63,14 +67,21 @@ export const TickMarkers = React.memo(function TickMarkers({
   const ticks = useMemo(() => computeTicks({ start, end, left, right, width }), [start, end, left, right, width]);
   return (
     <G>
-      {ticks.map((t) => (
-        <G key={t.seconds}>
-          <Line x1={t.x} y1={0} x2={t.x} y2={height} stroke={theme.border} strokeWidth={1} />
-          <SvgText x={t.x + 4} y={12} fontSize={10} fill={theme.textTertiary}>
-            {t.label}
-          </SvgText>
-        </G>
-      ))}
+      {ticks.map((t) => {
+        // UI-025: the same clipping UI-016 fixed for the playhead/skimmer. `computeTicks`
+        // admits any tick with x <= width, and `text-anchor: start` then drew the last
+        // label past the SVG viewport (61s fixture, 375pt canvas: x=368.8, label 24pt wide),
+        // so the right-most time simply vanished.
+        const p = labelPlacement(t.x, width, t.label, TICK_FONT_SIZE);
+        return (
+          <G key={t.seconds}>
+            <Line x1={t.x} y1={0} x2={t.x} y2={height} stroke={theme.border} strokeWidth={1} />
+            <SvgText x={p.x} textAnchor={p.anchor} y={12} fontSize={TICK_FONT_SIZE} fill={theme.textTertiary}>
+              {t.label}
+            </SvgText>
+          </G>
+        );
+      })}
     </G>
   );
 });
@@ -116,11 +127,15 @@ export const ClipmarkLayer = React.memo(function ClipmarkLayer({
           <G key={c.id}>
             <Line x1={x} y1={0} x2={x} y2={height} stroke={theme.tlMarkPoint} strokeWidth={active ? 3 : 2} />
             <Polygon points={`${x},${band.y - 6} ${x + 5},${band.y - 1} ${x},${band.y + 4} ${x - 5},${band.y - 1}`} fill={theme.tlMarkPoint} />
-            {glyph === 'plate' && (
-              <SvgText x={x + 4} y={band.y + 4} fontSize={9} fontWeight="700" fill={theme.tlMarkPoint}>
-                LP
-              </SvgText>
-            )}
+            {glyph === 'plate' && (() => {
+              // UI-025: an 'LP' plate on a clipmark at the right edge was clipped too.
+              const p = labelPlacement(x, geo.width, 'LP', PLATE_FONT_SIZE);
+              return (
+                <SvgText x={p.x} textAnchor={p.anchor} y={band.y + 4} fontSize={PLATE_FONT_SIZE} fontWeight="700" fill={theme.tlMarkPoint}>
+                  LP
+                </SvgText>
+              );
+            })()}
           </G>
         );
       })}
@@ -142,12 +157,17 @@ export function GhostBand({ x1, x2, height }: { x1: number; x2: number; height: 
   );
 }
 
-/** Resize grips on the active editable clip (web TimelineClipmarkHandle; hit-testing is done in JS). */
-export function ClipHandles({ x1, x2, height }: { x1: number; x2: number; height: number }) {
+/**
+ * Resize grips on the active editable clip (web TimelineClipmarkHandle; hit-testing is done
+ * in JS). UI-016: a clip that starts before / ends after the zoom window puts its grip on the
+ * canvas edge, where half of it was drawn outside the SVG — clamp it fully inside.
+ */
+export function ClipHandles({ x1, x2, height, width }: { x1: number; x2: number; height: number; width: number }) {
   const band = bandGeometry(height);
-  const grip = (x: number) => (
-    <Rect x={x - 2} y={band.y - 4} width={4} height={band.h + 8} rx={2} fill={theme.tlClipEdge} stroke="#FFFFFF" strokeWidth={1} />
-  );
+  const grip = (x: number) => {
+    const cx = clampToCanvas(x, width, 2 + 0.5); // half the 4pt grip + half its 1pt stroke
+    return <Rect x={cx - 2} y={band.y - 4} width={4} height={band.h + 8} rx={theme.radiusXs} fill={theme.tlClipEdge} stroke={theme.surface} strokeWidth={1} />;
+  };
   return (
     <G>
       {grip(x1)}
@@ -156,22 +176,29 @@ export function ClipHandles({ x1, x2, height }: { x1: number; x2: number; height
   );
 }
 
-export function Skimmer({ x, label, height }: { x: number; label: string; height: number }) {
+/** Label font size of the playhead / skimmer readouts (also used to place them). */
+export const MARKER_LABEL_SIZE = 10;
+
+export function Skimmer({ x, label, height, width }: { x: number; label: string; height: number; width: number }) {
+  const p = labelPlacement(x, width, label, MARKER_LABEL_SIZE);
   return (
     <G>
       <Line x1={x} y1={0} x2={x} y2={height} stroke={theme.tlSkimmer} strokeWidth={1} />
-      <SvgText x={x + 4} y={28} fontSize={10} fill={theme.tlSkimmer}>
+      <SvgText x={p.x} y={28} textAnchor={p.anchor} fontSize={MARKER_LABEL_SIZE} fill={theme.tlSkimmer}>
         {label}
       </SvgText>
     </G>
   );
 }
 
-export function Playhead({ x, label, height }: { x: number; label: string; height: number }) {
+export function Playhead({ x, label, height, width }: { x: number; label: string; height: number; width: number }) {
+  // UI-016: on a live stream the playhead sits AT the right edge, where a start-anchored
+  // label was clipped away; flip it to the left of the line there.
+  const p = labelPlacement(x, width, label, MARKER_LABEL_SIZE);
   return (
     <G>
       <Line x1={x} y1={0} x2={x} y2={height} stroke={theme.tlPlayhead} strokeWidth={2} />
-      <SvgText x={x + 4} y={height - 6} fontSize={10} fontWeight="700" fill={theme.tlPlayhead}>
+      <SvgText x={p.x} y={height - 6} textAnchor={p.anchor} fontSize={MARKER_LABEL_SIZE} fontWeight="700" fill={theme.tlPlayhead}>
         {label}
       </SvgText>
     </G>

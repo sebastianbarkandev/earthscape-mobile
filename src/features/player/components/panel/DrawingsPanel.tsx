@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { theme } from '@/common/theme';
+import { denseText } from '@/common/typography';
 import { Icon } from '@/common/components/Icon';
 import { TextPromptModal } from '@/common/components/TextPromptModal';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
@@ -8,6 +9,7 @@ import type { DrawnObject } from '../../api';
 import { updateDrawnObject } from '../../eventThunks';
 import { setFocusCoordinates } from '../../playerSlice';
 import { selectCurrentUserId } from '../../timeline/selectors';
+import { touchSlop, verticalTouchSlop } from '@/common/touchTarget';
 
 /** Web DrawnObjectsTable (read + rename + recenter); drawing tools themselves are out of scope. */
 export function DrawingsPanel({ drawnObjects }: { drawnObjects: DrawnObject[] }) {
@@ -43,15 +45,15 @@ export function DrawingsPanel({ drawnObjects }: { drawnObjects: DrawnObject[] })
               <View style={styles.chips}>
                 <Text style={styles.type}>{d.the_geom?.type ?? 'Shape'}</Text>
                 {coords(d).map((c) => (
-                  <Pressable key={c.label} style={styles.chip} hitSlop={4} onPress={() => dispatch(setFocusCoordinates({ lat: c.lat, lon: c.lon }))}>
+                  <Pressable key={c.label} style={styles.chip} hitSlop={verticalTouchSlop(34)} onPress={() => dispatch(setFocusCoordinates({ lat: c.lat, lon: c.lon }))}>
                     <Icon name="location-crosshairs" size={9} color={theme.accentActive} />
-                    <Text style={styles.chipText}>{c.label} {c.lat.toFixed(4)}, {c.lon.toFixed(4)}</Text>
+                    <Text {...denseText} style={styles.chipText}>{c.label} {c.lat.toFixed(4)}, {c.lon.toFixed(4)}</Text>
                   </Pressable>
                 ))}
               </View>
             </View>
             {canDraw && own && (
-              <Pressable onPress={() => setEditing(d)} hitSlop={8}><Icon name="pen" size={12} color={theme.textSecondary} /></Pressable>
+              <Pressable onPress={() => setEditing(d)} hitSlop={touchSlop(12)} accessibilityRole="button" accessibilityLabel={`Rename ${d.text || `drawing ${d.id}`}`}><Icon name="pen" size={12} color={theme.textSecondary} /></Pressable>
             )}
           </View>
         );
@@ -62,7 +64,7 @@ export function DrawingsPanel({ drawnObjects }: { drawnObjects: DrawnObject[] })
         initialValue={editing?.text ?? ''}
         onCancel={() => setEditing(null)}
         onConfirm={(v) => {
-          if (editing) dispatch(updateDrawnObject({ id: editing.id, text: v.trim(), color: editing.color || '#FB8333' }));
+          if (editing) dispatch(updateDrawnObject({ id: editing.id, text: v.trim(), color: editing.color || theme.accent }));
           setEditing(null);
         }}
       />
@@ -74,10 +76,14 @@ const styles = StyleSheet.create({
   wrap: { padding: 10, gap: 8 },
   empty: { padding: 16, textAlign: 'center', color: theme.textTertiary, fontSize: 13 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: theme.surface, borderRadius: theme.radiusMd, borderWidth: 1, borderColor: theme.border, padding: 10 },
-  swatch: { width: 12, height: 12, borderRadius: 3 },
+  swatch: { width: 12, height: 12, borderRadius: theme.radiusXs },
   name: { fontSize: 13, fontWeight: '600', color: theme.textPrimary },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  // UI-028: a WRAPPING row — the neighbour below is a VERTICAL one, so the 5pt slop of a
+  // 34pt box needs a rowGap of at least 10 (a 24pt box needed 10pt/side and overlapped the
+  // line above by 14pt). rowGap only applies BETWEEN wrapped lines, so the dense single-line
+  // case is unchanged.
+  chips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, rowGap: 10 },
   type: { fontSize: 11, color: theme.textTertiary },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 22, paddingHorizontal: 7, borderRadius: theme.radiusPill, backgroundColor: theme.bgSubtle },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 34, paddingHorizontal: 7, borderRadius: theme.radiusPill, backgroundColor: theme.bgSubtle },
   chipText: { fontSize: 10, fontWeight: '600', color: theme.textPrimary, fontVariant: ['tabular-nums'] },
 });

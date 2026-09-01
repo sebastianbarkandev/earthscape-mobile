@@ -1,6 +1,7 @@
 import React from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { theme } from '@/common/theme';
+import { gridItemMaxWidth } from '@/common/layout';
 import { resolveMediaUrl } from '@/common/config';
 import { formatDuration, isoToDate } from '@/common/lib/normalizeDate';
 import { LiveBadge } from './LiveBadge';
@@ -9,18 +10,20 @@ import type { VideoListItem } from '@/features/library/librarySlice';
 interface Props {
   item: VideoListItem;
   live?: boolean;
+  /** Columns of the grid this card sits in — caps a lone last-row card at one column (UI-003). */
+  columns?: number;
   onPress: (item: VideoListItem) => void;
 }
 
 /** Thumbnail card shared by Library and Live grids (web: video-thumbnail-container). */
-export function VideoCard({ item, live, onPress }: Props) {
+export function VideoCard({ item, live, columns, onPress }: Props) {
   const recorded = isoToDate(item.start ?? item.date_posted);
   // '/static/thumbnails/...' on on-premise orgs, absolute CDN URL otherwise.
   const thumb = resolveMediaUrl(item.thumbnail_url);
   return (
     <Pressable
       onPress={() => onPress(item)}
-      style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.card, { maxWidth: gridItemMaxWidth(columns) }, pressed && styles.pressed]}
     >
       <View style={styles.thumbWrap}>
         {thumb ? (
@@ -71,12 +74,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 6,
     right: 6,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    borderRadius: 4,
+    backgroundColor: theme.overlayBgStrong,
+    borderRadius: theme.radiusSm,
     paddingHorizontal: 5,
     paddingVertical: 1,
   },
-  durationText: { color: '#FFFFFF', fontSize: 11, fontVariant: ['tabular-nums'] },
+  durationText: { color: theme.overlayText, fontSize: 11, fontVariant: ['tabular-nums'] },
   meta: { padding: 10, gap: 3 },
   title: { fontSize: 13, fontWeight: '600', color: theme.textPrimary, lineHeight: 17 },
   sub: { fontSize: 11, color: theme.textSecondary },

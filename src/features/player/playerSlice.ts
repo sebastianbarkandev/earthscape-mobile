@@ -3,6 +3,7 @@ import {
   getEvent,
   getVideoPermissions,
   type Clipmark,
+  type EventPayload,
   type EventTag,
   type EventVideo,
   type FlightData,
@@ -62,6 +63,8 @@ export interface PlayerState {
   videos: EventVideo[];
   activeVideoId: number | null;
   permissions: VideoPermissions | null;
+  /** Permissions on the event's PRIMARY video — what "Add my camera" is gated on (SEC-017); equals `permissions` when the active video is the primary. */
+  primaryPermissions: VideoPermissions | null;
   timeMappers: Record<number, TimeMapperSpec>;
   clipmarks: Clipmark[];
   time: {
@@ -117,6 +120,7 @@ const initialState: PlayerState = {
   videos: [],
   activeVideoId: null,
   permissions: null,
+  primaryPermissions: null,
   timeMappers: {},
   clipmarks: [],
   time: { currentVideo: null, currentUtc: null, start: null, end: null, duration: null },
@@ -156,9 +160,17 @@ export function filterClipmarks(clipmarks: Clipmark[] | null | undefined): Clipm
   return (clipmarks ?? []).filter((c) => c?.the_json?.data?.name !== 'activate_marker');
 }
 
-export const loadEvent = createAsyncThunk(
+interface LoadEventResult {
+  event: EventPayload['events'][number];
+  video: EventVideo;
+  permissions: VideoPermissions | null;
+  /** Omitted (tests / older callers) = same as `permissions`. */
+  primaryPermissions?: VideoPermissions | null;
+}
+
+export const loadEvent = createAsyncThunk<LoadEventResult, { eventId: number | string; videoIdHint?: number }>(
   'player/loadEvent',
-  async (args: { eventId: number | string; videoIdHint?: number }) => {
+  async (args) => {
     const payload = await getEvent(args.eventId);
     const event = payload.events[0];
     if (!event) throw new Error('Event not found');
@@ -171,9 +183,106 @@ export const loadEvent = createAsyncThunk(
     const permissions = await getVideoPermissions(video.id)
       .then((r) => r.permissions)
       .catch(() => null);
-    return { event, video, permissions };
+    // "Add my camera" is about the PRIMARY (the backend joins phones to it), which may not be
+    // the video being played — fetch ITS permissions in that case, one extra call (SEC-017).
+    const primary = event.videos.find((v) => v.is_primary) ?? null;
+    const primaryPermissions =
+      !primary || primary.id === video.id
+        ? permissions
+        : await getVideoPermissions(primary.id)
+            .then((r) => r.permissions)
+            .catch(() => null);
+    return { event, video, permissions, primaryPermissions };
   },
 );
+
+/**
+ * NON-destructive re-read of the event (same GET as loadEvent) for the live case:
+ * programs join/end mid-stream, the heartbeat reports a live<->VOD flip, or
+ * flight_data 403s mid-transition. The reducer merges `videos[]` by id and
+ * refreshes the active video's state/mappers WITHOUT touching status, mapData,
+ * time or timeline — the native player keeps running and the source only swaps
+ * when the active video's URL actually changes (useVideoPlayer keys on it).
+ */
+export const refreshEvent = createAsyncThunk<
+  { event: EventPayload['events'][number] },
+  { eventId: number | string }
+>('player/refreshEvent', async (args) => {
+  const payload = await getEvent(args.eventId);
+  const event = payload.events[0];
+  if (!event) throw new Error('Event not found');
+  return { event };
+});
+
+/**
+ * Multi-program tile tap. Permissions are PER VIDEO (ACL orgs grant per uploader /
+ * per program), so a swap must re-read them: `setActiveVideo` clears `permissions`
+ * (the UI fails closed) and this thunk fills them back in for the video the viewer
+ * actually landed on. `primaryPermissions` is deliberately left alone — it gates
+ * "Add my camera" on the PRIMARY (SEC-017) and never changes with the tile.
+ */
+export const selectProgram = createAsyncThunk<
+  { videoId: number; permissions: VideoPermissions | null },
+  number,
+  { state: { player: PlayerState } }
+>('player/selectProgram', async (videoId, { dispatch, getState }) => {
+  if (getState().player.activeVideoId !== videoId) dispatch(setActiveVideo(videoId));
+  const permissions = await getVideoPermissions(videoId)
+    .then((r) => r.permissions)
+    .catch(() => null);
+  return { videoId, permissions };
+});
+
+/**
+ * Union of the server's clipmark rows for the active video with local rows the GET
+ * raced. Ids come from a monotonic DB sequence, so a local row whose id is higher
+ * than everything the server returned is one we just created (keep it); an older
+ * local row missing from the response was deleted server-side (drop it).
+ * Returns `existing` UNCHANGED (same reference) when nothing meaningful moved, so the
+ * 20 s live refresh does not re-render the timeline canvas every cycle.
+ */
+export function mergeClipmarks(existing: Clipmark[], incoming: Clipmark[]): Clipmark[] {
+  const maxIncomingId = incoming.reduce((m, c) => Math.max(m, c.id), 0);
+  const ids = new Set(incoming.map((c) => c.id));
+  // An empty payload is authoritative (there is nothing for a local row to be newer than).
+  const localOnly = incoming.length ? existing.filter((c) => !ids.has(c.id) && c.id > maxIncomingId) : [];
+  const merged = [...incoming, ...localOnly];
+  const same =
+    merged.length === existing.length &&
+    merged.every((c, i) => {
+      const e = existing[i];
+      return (
+        e != null &&
+        e.id === c.id &&
+        e.type === c.type &&
+        e.text === c.text &&
+        e.time_start === c.time_start &&
+        e.time_end === c.time_end
+      );
+    });
+  return same ? existing : merged;
+}
+
+/**
+ * Pure merge used by refreshEvent.fulfilled: existing order is kept, changed
+ * videos are replaced, programs that joined are appended, programs that vanished
+ * are dropped unless they are the active one (the player must not lose its source).
+ */
+export function mergeEventVideos(existing: EventVideo[], incoming: EventVideo[], activeVideoId: number | null): EventVideo[] {
+  const byId = new Map(incoming.map((v) => [v.id, v]));
+  const merged: EventVideo[] = [];
+  existing.forEach((v) => {
+    const next = byId.get(v.id);
+    if (next) {
+      merged.push(next);
+      byId.delete(v.id);
+    } else if (v.id === activeVideoId) {
+      merged.push(v);
+    }
+  });
+  byId.forEach((v) => merged.push(v));
+  return merged;
+}
 
 const playerSlice = createSlice({
   name: 'player',
@@ -250,11 +359,17 @@ const playerSlice = createSlice({
       const video = state.videos.find((v) => v.id === payload);
       if (!video || state.activeVideoId === payload) return;
       state.activeVideoId = video.id;
+      // Permissions are per video: until selectProgram re-reads them for THIS program the UI
+      // must fail closed (LIVE-017) rather than offer edits granted on the previous one.
+      state.permissions = null;
       state.clipmarks = filterClipmarks(video.clipmarks);
       state.isLive = video.live_stream_state === 'live';
       const start = video.start ?? 0;
       const end = video.live_stream_state === 'live' ? video.end ?? start : start + (video.duration ?? 0);
       state.time = { currentVideo: 0, currentUtc: start, start, end, duration: video.duration ?? null };
+      // flight_data is fetched per video (useFlightData re-runs on the id change): drop the old
+      // series here, otherwise appendFlightData would concat two programs' tracks (graphSlice mirrors this).
+      state.mapData = emptyMap;
       state.seek = null;
       state.timeline = { ...initialTimelineState, tool: state.timeline.tool, sensorVisibility: state.timeline.sensorVisibility };
     },
@@ -267,7 +382,7 @@ const playerSlice = createSlice({
       s.mapData = emptyMap;
     });
     b.addCase(loadEvent.fulfilled, (s, { payload }) => {
-      const { event, video, permissions } = payload;
+      const { event, video, permissions, primaryPermissions } = payload;
       s.status = 'ready';
       s.eventId = event.id;
       s.eventTags = event.tags ?? [];
@@ -275,6 +390,7 @@ const playerSlice = createSlice({
       s.videos = event.videos;
       s.activeVideoId = video.id;
       s.permissions = permissions;
+      s.primaryPermissions = primaryPermissions === undefined ? permissions : primaryPermissions;
       s.clipmarks = filterClipmarks(video.clipmarks);
       s.isLive = video.live_stream_state === 'live';
       event.videos.forEach((v) => {
@@ -294,6 +410,38 @@ const playerSlice = createSlice({
       };
       s.timeline = { ...initialTimelineState, tool: s.timeline.tool, sensorVisibility: s.timeline.sensorVisibility };
       s.transcript = initialState.transcript;
+    });
+    b.addCase(refreshEvent.fulfilled, (s, { payload }) => {
+      const { event } = payload;
+      // Stale response after navigating to another event (or before the first load): ignore.
+      if (s.status !== 'ready' || s.eventId !== event.id) return;
+      s.eventTags = event.tags ?? s.eventTags;
+      s.customFieldValues = event.custom_field_values ?? s.customFieldValues;
+      s.videos = mergeEventVideos(s.videos, event.videos, s.activeVideoId);
+      event.videos.forEach((v) => {
+        s.timeMappers[v.id] = toMapperSpec(v);
+      });
+      const active = s.videos.find((v) => v.id === s.activeVideoId);
+      if (!active) return;
+      // Clipmarks created elsewhere (timepoints, TAK chat) arrive with this payload — without the
+      // merge an open live player never sees them (LIVE-018). Timeline/player state is untouched.
+      s.clipmarks = mergeClipmarks(s.clipmarks, filterClipmarks(active.clipmarks));
+      const nowLive = active.live_stream_state === 'live';
+      const duration = active.duration ?? null;
+      if (nowLive !== s.isLive || duration !== s.time.duration) {
+        // live -> processing/recording_ready (or back): the range changes, the playhead does not.
+        s.isLive = nowLive;
+        const start = active.start ?? s.time.start ?? 0;
+        s.time.start = start;
+        s.time.end = nowLive ? active.end ?? start : start + (active.duration ?? 0);
+        s.time.duration = duration;
+      }
+    });
+
+    b.addCase(selectProgram.fulfilled, (s, { payload }) => {
+      // Another tile was tapped while this request was in flight: its own result decides.
+      if (s.activeVideoId !== payload.videoId) return;
+      s.permissions = payload.permissions;
     });
 
     // ── transcript + drawn objects (Phase C) ──
@@ -478,5 +626,13 @@ export const {
 
 export const selectActiveVideo = (s: { player: PlayerState }) =>
   s.player.videos.find((v) => v.id === s.player.activeVideoId) ?? null;
+
+/** The event's primary program (multi-program events: joining phones are non-primary). */
+export const selectPrimaryVideo = (s: { player: PlayerState }) =>
+  s.player.videos.find((v) => v.is_primary) ?? null;
+
+/** True while ANY program of the event is live — drives the periodic non-destructive refresh. */
+export const selectAnyLive = (s: { player: PlayerState }) =>
+  s.player.videos.some((v) => v.live_stream_state === 'live');
 
 export default playerSlice.reducer;

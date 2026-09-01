@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { theme } from '@/common/theme';
+import { DENSE_MAX_FONT_SCALE, denseText } from '@/common/typography';
+import { pagedSlice, showMoreLabel } from '@/common/showMore';
 import { Icon } from '@/common/components/Icon';
 import { formatTime } from '@/common/lib/formatTime';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
@@ -11,6 +13,7 @@ import { useSeek } from '../../hooks/useSeek';
 import { canEditClipmark, clipmarkTitle, formatDurationLabel, getAuthor, getEventType } from '../../timeline/clipmarkUtils';
 import { eventAuthors, filterEvents, type EventSort, type EventTypeFilter } from '../../timeline/eventFilters';
 import { selectCurrentUserId } from '../../timeline/selectors';
+import { touchSlop, verticalTouchSlop } from '@/common/touchTarget';
 
 interface Props {
   videoId: number;
@@ -21,6 +24,8 @@ const TYPE_OPTIONS: Array<{ key: EventTypeFilter; label: string }> = [
   { key: 'all', label: 'All types' }, { key: 'clip', label: 'Clips' }, { key: 'timepoint', label: 'Timepoints' },
   { key: 'note', label: 'Notes' }, { key: 'plate', label: 'Plates' }, { key: 'marker', label: 'Markers' }, { key: 'hardware', label: 'Hardware' },
 ];
+/** Event cards rendered before the first "Show more" (UI-002). */
+const EVENT_PAGE = 10;
 const SORT_OPTIONS: Array<{ key: EventSort; label: string }> = [
   { key: 'time', label: 'Time (earliest first)' }, { key: 'last', label: 'Time (latest first)' }, { key: 'recent', label: 'Recently added' }, { key: 'oldest', label: 'Oldest added' },
 ];
@@ -38,9 +43,14 @@ export function EventsPanel({ videoId, onOpenSheet }: Props) {
   const [user, setUser] = useState<string | null>(null);
   const [sort, setSort] = useState<EventSort>('time');
   const [expanded, setExpanded] = useState<number | null>(null);
+  // UI-002: the drawer no longer scrolls on its own, so the card list is paged instead of
+  // rendering every clipmark of a long flight.
+  const [pages, setPages] = useState(1);
 
   const rows = useMemo(() => filterEvents(clipmarks, { search, type, user, sort }), [clipmarks, search, type, user, sort]);
   const authors = useMemo(() => eventAuthors(clipmarks), [clipmarks]);
+  const paged = pagedSlice(rows, EVENT_PAGE, pages);
+  const moreLabel = showMoreLabel(paged, 'event');
 
   const pick = <T,>(title: string, options: Array<{ key: T; label: string }>, onPick: (k: T) => void) => {
     const labels = options.map((o) => o.label);
@@ -56,7 +66,7 @@ export function EventsPanel({ videoId, onOpenSheet }: Props) {
       <View style={styles.toolbar}>
         <View style={styles.search}>
           <Icon name="magnifying-glass" size={12} color={theme.textTertiary} />
-          <TextInput style={styles.searchInput} value={search} onChangeText={setSearch} placeholder="Search timeline events…" placeholderTextColor={theme.textTertiary} autoCorrect={false} />
+          <TextInput maxFontSizeMultiplier={DENSE_MAX_FONT_SCALE} style={styles.searchInput} value={search} onChangeText={setSearch} placeholder="Search timeline events…" placeholderTextColor={theme.textTertiary} autoCorrect={false} />
         </View>
         <Chip label={TYPE_OPTIONS.find((o) => o.key === type)?.label ?? 'Type'} active={type !== 'all'} onPress={() => pick('Filter by type', TYPE_OPTIONS, setType)} />
         {authors.length > 1 && (
@@ -67,7 +77,7 @@ export function EventsPanel({ videoId, onOpenSheet }: Props) {
       {rows.length === 0 ? (
         <Text style={styles.empty}>No timeline events</Text>
       ) : (
-        rows.map((c) => (
+        paged.shown.map((c) => (
           <EventCard
             key={c.id}
             c={c}
@@ -85,15 +95,20 @@ export function EventsPanel({ videoId, onOpenSheet }: Props) {
           />
         ))
       )}
+      {moreLabel && (
+        <Pressable onPress={() => setPages((p) => p + 1)} style={styles.more} hitSlop={touchSlop(36)} accessibilityRole="button" accessibilityLabel={moreLabel}>
+          <Text style={styles.moreText}>{moreLabel}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
 
 function Chip({ label, icon, active, onPress }: { label: string; icon?: React.ComponentProps<typeof Icon>['name']; active?: boolean; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]} hitSlop={4}>
+    <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]} hitSlop={verticalTouchSlop(34)}>
       {icon && <Icon name={icon} size={11} color={theme.textSecondary} />}
-      <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={1}>{label}</Text>
+      <Text {...denseText} style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={1}>{label}</Text>
       {!icon && <Icon name="chevron-down" size={9} color={theme.textTertiary} />}
     </Pressable>
   );
@@ -124,13 +139,13 @@ function EventCard({ c, active, expanded, canEdit, videoSeconds, onToggle, onSee
       <Pressable onPress={onToggle} style={styles.cardHead}>
         <View style={styles.pill}>
           <Icon name={type.icon} size={10} color={theme.accentActive} />
-          <Text style={styles.pillText}>{type.label}</Text>
+          <Text {...denseText} style={styles.pillText}>{type.label}</Text>
         </View>
         <Text style={styles.title} numberOfLines={expanded ? undefined : 1}>{clipmarkTitle(c)}</Text>
         {canEdit && (
           <View style={styles.actions}>
-            <Pressable onPress={onEdit} hitSlop={6}><Icon name="pen" size={12} color={theme.textSecondary} /></Pressable>
-            <Pressable onPress={onDelete} hitSlop={6}><Icon name="xmark" size={13} color={theme.danger} /></Pressable>
+            <Pressable onPress={onEdit} style={styles.iconBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel="Edit event"><Icon name="pen" size={12} color={theme.textSecondary} /></Pressable>
+            <Pressable onPress={onDelete} style={styles.iconBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel="Delete event"><Icon name="xmark" size={13} color={theme.danger} /></Pressable>
           </View>
         )}
         <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} color={theme.textTertiary} />
@@ -174,32 +189,44 @@ function EventCard({ c, active, expanded, canEdit, videoSeconds, onToggle, onSee
 
 function TimeChip({ label, icon, onPress }: { label: string; icon?: React.ComponentProps<typeof Icon>['name']; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={styles.timeChip} hitSlop={4}>
+    <Pressable onPress={onPress} style={styles.timeChip} hitSlop={verticalTouchSlop(34)}>
       <Icon name={icon ?? 'play'} size={9} color={theme.accentActive} />
-      <Text style={styles.timeChipText}>{label}</Text>
+      <Text {...denseText} style={styles.timeChipText}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: { gap: 8, padding: 10 },
-  toolbar: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  search: { flexDirection: 'row', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 160, height: 32, paddingHorizontal: 10, borderRadius: theme.radiusSm, borderWidth: 1, borderColor: theme.borderStrong, backgroundColor: theme.surface },
+  // UI-028: a WRAPPING row — the neighbour below is a VERTICAL one, so the 5pt slop of a
+  // 34pt box needs a rowGap of at least 10 (a 24pt box needed 10pt/side and overlapped the
+  // line above by 14pt). rowGap only applies BETWEEN wrapped lines, so the dense single-line
+  // case is unchanged.
+  toolbar: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, rowGap: 10 },
+  search: { flexDirection: 'row', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 160, minHeight: 32, paddingHorizontal: 10, borderRadius: theme.radiusSm, borderWidth: 1, borderColor: theme.borderStrong, backgroundColor: theme.surface },
   searchInput: { flex: 1, fontSize: 13, color: theme.textPrimary, paddingVertical: 0 },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 30, paddingHorizontal: 10, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surface, maxWidth: 160 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 34, paddingHorizontal: 10, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surface, maxWidth: 160 },
   chipActive: { borderColor: theme.accent, backgroundColor: theme.accentTint },
   chipText: { fontSize: 12, fontWeight: '600', color: theme.textSecondary },
   chipTextActive: { color: theme.accentActive },
   empty: { padding: 16, textAlign: 'center', color: theme.textTertiary, fontSize: 13 },
+  more: { minHeight: 36, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center' },
+  moreText: { fontSize: 12, fontWeight: '600', color: theme.accentActive },
   card: { backgroundColor: theme.surface, borderRadius: theme.radiusMd, borderWidth: 1, borderColor: theme.border, padding: 10, gap: 8 },
   cardActive: { borderColor: theme.accent },
-  cardHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  pill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 7, height: 22, borderRadius: theme.radiusPill, backgroundColor: theme.accentTint },
+  cardHead: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44 },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 7, minHeight: 22, borderRadius: theme.radiusPill, backgroundColor: theme.accentTint },
   pillText: { fontSize: 10, fontWeight: '700', color: theme.accentActive },
   title: { flex: 1, fontSize: 13, fontWeight: '600', color: theme.textPrimary },
-  actions: { flexDirection: 'row', gap: 12, paddingHorizontal: 4 },
-  chips: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
-  timeChip: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 24, paddingHorizontal: 8, borderRadius: theme.radiusPill, backgroundColor: theme.bgSubtle },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 4 },
+  // UI-024: 12/13pt glyphs grown by a symmetric slop put Delete's hit frame 4pt INSIDE the
+  // Edit pen (RN takes the last overlapping sibling) — a real 32pt box + slop 6 exactly fills
+  // the 12pt gap instead, so the pen can no longer open the delete confirmation.
+  iconBtn: { width: 32, minHeight: 32, alignItems: 'center', justifyContent: 'center' },
+  // UI-028: wrapping row — see `toolbar`. A 24pt chip's 10pt slop reached 4pt into the
+  // visible box of the chip on the line above, so a tap on the start time seeked to the end.
+  chips: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, rowGap: 10 },
+  timeChip: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 34, paddingHorizontal: 8, borderRadius: theme.radiusPill, backgroundColor: theme.bgSubtle },
   timeChipText: { fontSize: 11, fontWeight: '600', color: theme.textPrimary, fontVariant: ['tabular-nums'] },
   arrow: { fontSize: 11, color: theme.textTertiary },
   dur: { fontSize: 11, color: theme.textSecondary },

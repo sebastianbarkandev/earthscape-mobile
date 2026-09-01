@@ -121,7 +121,8 @@ export interface EventPayload {
 }
 
 export function getEvent(eventId: number | string) {
-  return api<EventPayload>(`/api/v1/events/${eventId}.json`);
+  // Route params are validated in app/video/[eventId].tsx; encoding here is defence in depth.
+  return api<EventPayload>(`/api/v1/events/${encodeURIComponent(String(eventId))}.json`);
 }
 
 /** GET /api/v1/videos/{id}/event_id (video_shell_config_api) — per-video permissions. */

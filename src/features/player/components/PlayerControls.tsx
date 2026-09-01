@@ -1,9 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActionSheetIOS, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActionSheetIOS, PanResponder, Platform, Pressable, StyleSheet, Text, View, type PanResponderInstance } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { theme } from '@/common/theme';
+import { edgePadding } from '@/common/layout';
 import { Icon } from '@/common/components/Icon';
 import { LiveBadge } from '@/common/components/LiveBadge';
 import { formatTime } from '@/common/lib/formatTime';
+import { denseText } from '@/common/typography';
+import { verticalTouchSlop } from '@/common/touchTarget';
+import { useAppSelector } from '@/store/hooks';
 
 const SPEEDS = [0.5, 1, 1.5, 2, 3]; // web PlaybackSpeedButton
 const HIDE_AFTER_MS = 3000; // web PlaybackControlProgressBar auto-hide
@@ -15,7 +20,6 @@ interface Props {
   hasAudio: boolean;
   isLive: boolean;
   canSeek: boolean;
-  currentTime: number; // video seconds
   duration: number | null;
   onTogglePaused: () => void;
   onSeekTo: (videoTime: number) => void;
@@ -37,6 +41,10 @@ export function PlayerControls(p: Props) {
   const lastActivity = useRef(Date.now());
   const [scrub, setScrub] = useState<number | null>(null); // video seconds while dragging
   const [barWidth, setBarWidth] = useState(0);
+  // RESP-019: in landscape the transport row would otherwise start/end inside the ~59pt
+  // cut-out strip, clipping "Back 10 seconds" and "Fullscreen".
+  const insets = useSafeAreaInsets();
+  const barPad = edgePadding(insets, 8);
 
   const touch = useCallback(() => {
     lastActivity.current = Date.now();
@@ -50,45 +58,36 @@ export function PlayerControls(p: Props) {
     return () => clearInterval(t);
   }, [p.paused]);
 
+  // The clock is read HERE (not passed from PlayerScreen) so the 2 Hz timeUpdate only
+  // re-renders this bar, not the whole page (RESP-002).
+  const currentTime = useAppSelector((s) => s.player.time.currentVideo) ?? 0;
+
   const duration = p.duration ?? 0;
   const timeToX = (t: number) => (duration > 0 ? Math.min(1, Math.max(0, t / duration)) * barWidth : 0);
-  const xToTime = (x: number) => (barWidth > 0 ? Math.min(1, Math.max(0, x / barWidth)) * duration : 0);
 
-  const pan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => p.canSeek && duration > 0,
-      onMoveShouldSetPanResponder: () => p.canSeek && duration > 0,
+  // PanResponder is created ONCE and reads live values through a ref (TimelineCanvas does the
+  // same); rebuilding it every render allocated a new responder on every timeUpdate tick.
+  const latest = useRef({ canSeek: p.canSeek, duration, barWidth, onSeekTo: p.onSeekTo, touch });
+  latest.current = { canSeek: p.canSeek, duration, barWidth, onSeekTo: p.onSeekTo, touch };
+  // Lazy init: `useRef(PanResponder.create(...))` would still evaluate create() on every render.
+  const pan = useRef<PanResponderInstance | null>(null);
+  pan.current ??= PanResponder.create({
+      onStartShouldSetPanResponder: () => latest.current.canSeek && latest.current.duration > 0,
+      onMoveShouldSetPanResponder: () => latest.current.canSeek && latest.current.duration > 0,
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (e) => {
-        touch();
-        setScrub(xToTime(e.nativeEvent.locationX));
+        latest.current.touch();
+        setScrub(scrubTimeAt(latest.current, e.nativeEvent.locationX));
       },
-      onPanResponderMove: (e) => setScrub(xToTime(e.nativeEvent.locationX)),
+      onPanResponderMove: (e) => setScrub(scrubTimeAt(latest.current, e.nativeEvent.locationX)),
       onPanResponderRelease: (e) => {
-        const t = xToTime(e.nativeEvent.locationX);
+        const t = scrubTimeAt(latest.current, e.nativeEvent.locationX);
         setScrub(null);
-        p.onSeekTo(t);
+        latest.current.onSeekTo(t);
       },
       onPanResponderTerminate: () => setScrub(null),
-    }),
-  );
-  // PanResponder captures the closures at creation; refresh when inputs change.
-  pan.current = PanResponder.create({
-    onStartShouldSetPanResponder: () => p.canSeek && duration > 0,
-    onMoveShouldSetPanResponder: () => p.canSeek && duration > 0,
-    onPanResponderTerminationRequest: () => false,
-    onPanResponderGrant: (e) => {
-      touch();
-      setScrub(xToTime(e.nativeEvent.locationX));
-    },
-    onPanResponderMove: (e) => setScrub(xToTime(e.nativeEvent.locationX)),
-    onPanResponderRelease: (e) => {
-      const t = xToTime(e.nativeEvent.locationX);
-      setScrub(null);
-      p.onSeekTo(t);
-    },
-    onPanResponderTerminate: () => setScrub(null),
-  });
+    });
+  const panHandlers = pan.current.panHandlers;
 
   const pickSpeed = () => {
     touch();
@@ -106,23 +105,24 @@ export function PlayerControls(p: Props) {
     }
   };
 
-  const shown = scrub ?? p.currentTime;
+  const shown = scrub ?? currentTime;
   const step = p.paused ? 1 / 30 : 10;
 
+  // accessible={false}: VoiceOver must reach the individual controls, not one giant "button".
   return (
-    <Pressable style={StyleSheet.absoluteFill} onPress={() => (visible ? setVisible(false) : touch())}>
+    <Pressable style={StyleSheet.absoluteFill} onPress={() => (visible ? setVisible(false) : touch())} accessible={false}>
       {p.isLive && (
-        <View style={styles.liveBadge} pointerEvents="none">
+        <View testID="controls-live-badge" style={[styles.liveBadge, { left: Math.max(10, insets.left) }]} pointerEvents="none">
           <LiveBadge />
         </View>
       )}
       {visible && (
-        <View style={styles.bar} onStartShouldSetResponder={() => true} onResponderGrant={touch}>
+        <View testID="controls-bar" style={[styles.bar, barPad]} onStartShouldSetResponder={() => true} onResponderGrant={touch}>
           {/* scrubber (video-seconds, like the web bar; the timeline below is UTC) */}
           <View
             style={styles.track}
             onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
-            {...pan.current.panHandlers}
+            {...panHandlers}
           >
             <View style={styles.trackBg} />
             <View style={[styles.trackFill, { width: timeToX(shown) }]} />
@@ -130,26 +130,26 @@ export function PlayerControls(p: Props) {
           </View>
 
           <View style={styles.row}>
-            <CtlButton icon="backward-step" disabled={!p.canSeek} onPress={() => { touch(); p.onSeekBy(-step); }} />
-            <CtlButton icon={p.paused ? 'play' : 'pause'} onPress={() => { touch(); p.onTogglePaused(); }} big />
-            <CtlButton icon="forward-step" disabled={!p.canSeek} onPress={() => { touch(); p.onSeekBy(step); }} />
+            <CtlButton icon="backward-step" label={p.paused ? 'Back one frame' : 'Back 10 seconds'} disabled={!p.canSeek} onPress={() => { touch(); p.onSeekBy(-step); }} />
+            <CtlButton icon={p.paused ? 'play' : 'pause'} label={p.paused ? 'Play' : 'Pause'} onPress={() => { touch(); p.onTogglePaused(); }} big />
+            <CtlButton icon="forward-step" label={p.paused ? 'Forward one frame' : 'Forward 10 seconds'} disabled={!p.canSeek} onPress={() => { touch(); p.onSeekBy(step); }} />
             {p.hasAudio && (
-              <CtlButton icon={p.muted ? 'volume-xmark' : 'volume-high'} onPress={() => { touch(); p.onToggleMuted(); }} />
+              <CtlButton icon={p.muted ? 'volume-xmark' : 'volume-high'} label={p.muted ? 'Unmute' : 'Mute'} onPress={() => { touch(); p.onToggleMuted(); }} />
             )}
-            <Text style={styles.time}>
+            <Text style={styles.time} {...denseText} accessibilityLabel={`${formatTime(shown, false)}${!p.isLive && duration > 0 ? ` of ${formatTime(duration, false)}` : ''}`}>
               {formatTime(shown, false)}
               {!p.isLive && duration > 0 ? ` / ${formatTime(duration, false)}` : ''}
             </Text>
             <View style={{ flex: 1 }} />
             {p.isLive && (
-              <Pressable onPress={() => { touch(); p.onGoLive(); }} style={styles.goLive} hitSlop={8}>
-                <Text style={styles.goLiveText}>Go live</Text>
+              <Pressable onPress={() => { touch(); p.onGoLive(); }} style={styles.goLive} hitSlop={verticalTouchSlop(28)} accessibilityRole="button" accessibilityLabel="Go live">
+                <Text style={styles.goLiveText} {...denseText}>Go live</Text>
               </Pressable>
             )}
-            <Pressable onPress={pickSpeed} style={styles.speed} hitSlop={8}>
-              <Text style={styles.speedText}>{p.rate}×</Text>
+            <Pressable onPress={pickSpeed} style={styles.speed} hitSlop={verticalTouchSlop(28)} accessibilityRole="button" accessibilityLabel={`Playback speed ${p.rate}×`}>
+              <Text style={styles.speedText} {...denseText}>{p.rate}×</Text>
             </Pressable>
-            <CtlButton icon="expand" onPress={() => { touch(); p.onFullscreen(); }} />
+            <CtlButton icon="expand" label="Fullscreen" onPress={() => { touch(); p.onFullscreen(); }} />
           </View>
         </View>
       )}
@@ -157,19 +157,35 @@ export function PlayerControls(p: Props) {
   );
 }
 
+/** Scrubber x (pt, within the track) -> video seconds, from the latest bar geometry. */
+function scrubTimeAt(g: { barWidth: number; duration: number }, x: number): number {
+  return g.barWidth > 0 ? Math.min(1, Math.max(0, x / g.barWidth)) * g.duration : 0;
+}
+
 function CtlButton({
   icon,
+  label,
   onPress,
   disabled,
   big,
 }: {
   icon: React.ComponentProps<typeof Icon>['name'];
+  /** VoiceOver name — the FontAwesome glyph carries no text (RESP-009). */
+  label: string;
   onPress: () => void;
   disabled?: boolean;
   big?: boolean;
 }) {
   return (
-    <Pressable onPress={onPress} disabled={disabled} hitSlop={6} style={[styles.ctl, disabled && { opacity: 0.4 }]}>
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={verticalTouchSlop(36)}
+      style={[styles.ctl, disabled && { opacity: 0.4 }]}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
+    >
       <Icon name={icon} size={big ? 22 : 16} color={theme.overlayText} />
     </Pressable>
   );
@@ -187,14 +203,16 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
   },
   track: { height: 22, justifyContent: 'center', marginHorizontal: 4 },
-  trackBg: { position: 'absolute', left: 0, right: 0, height: 3, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.35)' },
-  trackFill: { position: 'absolute', left: 0, height: 3, borderRadius: 2, backgroundColor: theme.accent },
-  knob: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: theme.accent, top: 4 },
+  trackBg: { position: 'absolute', left: 0, right: 0, height: 3, borderRadius: theme.radiusPill, backgroundColor: theme.overlayTrack },
+  trackFill: { position: 'absolute', left: 0, height: 3, borderRadius: theme.radiusPill, backgroundColor: theme.accent },
+  knob: { position: 'absolute', width: 14, height: 14, borderRadius: theme.radiusPill, backgroundColor: theme.accent, top: 4 },
+  // UI-024: `gap: 2` between 36pt controls — a symmetric slop put Forward's hit frame over
+  // the right edge of Play, so every control here uses vertical-only slop.
   row: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   ctl: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   time: { color: theme.overlayText, fontSize: 12, fontVariant: ['tabular-nums'], marginLeft: 4 },
-  speed: { paddingHorizontal: 8, height: 28, justifyContent: 'center', borderRadius: theme.radiusSm, backgroundColor: 'rgba(255,255,255,0.15)' },
+  speed: { paddingHorizontal: 8, minHeight: 28, justifyContent: 'center', borderRadius: theme.radiusSm, backgroundColor: theme.overlayControl },
   speedText: { color: theme.overlayText, fontSize: 12, fontWeight: '700' },
-  goLive: { paddingHorizontal: 10, height: 28, justifyContent: 'center', borderRadius: theme.radiusPill, backgroundColor: theme.liveRed, marginRight: 6 },
-  goLiveText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  goLive: { paddingHorizontal: 10, minHeight: 28, justifyContent: 'center', borderRadius: theme.radiusPill, backgroundColor: theme.liveRed, marginRight: 6 },
+  goLiveText: { color: theme.overlayText, fontSize: 12, fontWeight: '700' },
 });

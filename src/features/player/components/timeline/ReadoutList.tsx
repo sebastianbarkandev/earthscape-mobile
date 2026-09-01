@@ -6,9 +6,16 @@ import { useAppSelector } from '@/store/hooks';
 import { selectActiveSeries } from '../../timeline/selectors';
 import { formatReadoutValue } from '../../timeline/readout';
 
-/** Web InfoBox as native rows: swatch · name · value at the skimmer (or playhead). */
-export function ReadoutList({ atUtc }: { atUtc: number | null }) {
+/**
+ * Web InfoBox as native rows: swatch · name · value at the skimmer (or playhead).
+ * RESP-024: the playhead is subscribed to HERE, not in TimelineCard — this list is the only
+ * part of the card that has to follow the 2 Hz clock, and the card's toolbar / metadata well
+ * used to re-render with it.
+ */
+export function ReadoutList({ skimUtc }: { skimUtc: number | null }) {
   const series = useAppSelector(selectActiveSeries);
+  const currentUtc = useAppSelector((s) => s.player.time.currentUtc);
+  const atUtc = skimUtc ?? currentUtc;
   if (!series.length) return null;
   return (
     <View style={styles.wrap}>
@@ -33,7 +40,7 @@ export function ReadoutList({ atUtc }: { atUtc: number | null }) {
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: 12, paddingVertical: 6, gap: 3, backgroundColor: theme.surface },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  swatch: { width: 10, height: 10, borderRadius: 2 },
+  swatch: { width: 10, height: 10, borderRadius: theme.radiusXs },
   name: { flex: 1, fontSize: 12, color: theme.textSecondary },
   value: { fontSize: 12, fontWeight: '600', color: theme.textPrimary, fontVariant: ['tabular-nums'] },
 });

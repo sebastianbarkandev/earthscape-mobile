@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PanResponder, StyleSheet, View, type GestureResponderEvent } from 'react-native';
+import { PanResponder, Pressable, StyleSheet, View, type GestureResponderEvent, type PanResponderInstance } from 'react-native';
 import Svg, { G, Rect } from 'react-native-svg';
 import { theme } from '@/common/theme';
 import { formatTime } from '@/common/lib/formatTime';
@@ -7,7 +7,8 @@ import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import type { Clipmark } from '../../api';
 import { beginClipDrag, endClipDrag, setZoom } from '../../playerSlice';
 import { createClipmark, updateClipmark } from '../../clipmarkThunks';
-import { HANDLE_HIT_W, MARK_HIT_W, TAP_MAX_MS, TAP_SLOP } from '../../timeline/constants';
+import { HANDLE_HIT_W, MARK_HIT_W } from '../../timeline/constants';
+import { shouldClaimMove, shouldReleaseResponder, touchDownX } from '../../timeline/gesture';
 import { dragClip, finalizeDrag, startDrag, type ClipDrag } from '../../timeline/clippingMachine';
 import { createGeometry, pinchWindow, transformFor, type Window } from '../../timeline/geometry';
 import { selectActiveSeries, selectBounds, selectCurrentUserId, selectSensorSegments, selectTimeWindow } from '../../timeline/selectors';
@@ -24,7 +25,6 @@ interface Props {
 }
 
 type Session =
-  | { kind: 'pending'; x0: number; t0: number; hit: Hit }
   | { kind: 'scrub' }
   | { kind: 'clipCreate'; machine: ClipDrag }
   | { kind: 'handle'; machine: ClipDrag }
@@ -37,6 +37,10 @@ type Hit = { clipmarkId: number | null; handle: { id: number; side: 'start' | 'e
  * select a mark, drag = scrub (seek on release), clip tool drag = create,
  * handle drag on the active clip = resize, pinch/two-finger = zoom+pan.
  * Nothing is written to Redux during a gesture; one commit on release.
+ * Responder policy (RESP-003, timeline/gesture.ts): the canvas sits inside the page
+ * ScrollView, so it never claims a touch on start — taps go through a Pressable overlay
+ * and a vertical swipe scrolls the page; only a horizontal-dominant move or a second
+ * finger claims the gesture, and once committed it is never released mid-drag.
  */
 export function TimelineCanvas({ videoId, height, onSelectClipmark, onSkimmerChange }: Props) {
   const dispatch = useAppDispatch();
@@ -114,21 +118,70 @@ export function TimelineCanvas({ videoId, height, onSelectClipmark, onSkimmerCha
   const touchesOf = (e: GestureResponderEvent) => e.nativeEvent.touches.map((t) => t.locationX);
   const pinchStats = (xs: number[]) => ({ c: (xs[0] + xs[1]) / 2, d: Math.max(1, Math.abs(xs[0] - xs[1])) });
 
-  const pan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderTerminationRequest: () => false,
+  // Tap (no drag): select the mark under the finger or seek there. Pressable, not the
+  // PanResponder, so the touch is never claimed on start (see gesture.ts).
+  const onTap = (x: number) => {
+    const hit = hitTest(x);
+    if (hit.clipmarkId != null) onSelectClipmark(hit.clipmarkId);
+    else seek.toUtc(live.current.geo.utcFromX(x));
+  };
+
+  // Where the finger went down, captured when the move is claimed (grant resets gestureState.dx).
+  const downX = useRef(0);
+  // Apply one move sample to a committed single-finger session.
+  const applyMove = (cur: Session, x: number) => {
+    const { geo: g, bounds: b } = live.current;
+    if (cur.kind === 'scrub') {
+      setSkimmerCoalesced(g.utcFromX(x));
+    } else if (cur.kind === 'clipCreate' || cur.kind === 'handle') {
+      cur.machine = dragClip(cur.machine, Math.min(b.end, Math.max(b.start, g.utcFromX(x))));
+      setGhost({ a: g.xFromUtc(cur.machine.time_start), b: g.xFromUtc(cur.machine.time_end) });
+    }
+  };
+
+  // Lazy init: `useRef(PanResponder.create(...))` would still evaluate create() on every 2 Hz render.
+  const pan = useRef<PanResponderInstance | null>(null);
+  pan.current ??= PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (e, g) => {
+        const claim = shouldClaimMove(g.dx, g.dy, e.nativeEvent.touches.length);
+        if (claim) downX.current = touchDownX(e.nativeEvent.locationX, g.dx);
+        return claim;
+      },
+      onPanResponderTerminationRequest: () => shouldReleaseResponder(session.current?.kind),
       onShouldBlockNativeResponder: () => true,
       onPanResponderGrant: (e) => {
-        const x0 = e.nativeEvent.locationX;
-        session.current = { kind: 'pending', x0, t0: Date.now(), hit: hitTest(x0) };
+        const xs = touchesOf(e);
+        const { geo: g, window: w, tl: t, canClip: cc } = live.current;
+        if (xs.length >= 2) {
+          const { c, d } = pinchStats(xs);
+          session.current = { kind: 'pinch', startWindow: w, c0: c, d0: d, live: w };
+          setSkimmerCoalesced(null);
+          return;
+        }
+        const x0 = downX.current;
+        const hit = hitTest(x0);
+        let cur: Session;
+        if (hit.handle) {
+          const { clip, side } = hit.handle;
+          const m = startDrag({ time_start: clip.time_start as number, time_end: clip.time_end as number }, side, clip.id);
+          dispatch(beginClipDrag(clip.id));
+          cur = { kind: 'handle', machine: m };
+        } else if (t.tool === 'clip' && cc && t.clipping.mode === 'idle') {
+          const t0 = g.utcFromX(x0);
+          dispatch(beginClipDrag(null));
+          cur = { kind: 'clipCreate', machine: startDrag({ time_start: t0, time_end: t0 }, 'end') };
+        } else {
+          cur = { kind: 'scrub' };
+        }
+        session.current = cur;
+        applyMove(cur, xs[0] ?? e.nativeEvent.locationX); // the finger has already moved past the slop
       },
       onPanResponderMove: (e) => {
         const s = session.current;
         if (!s) return;
         const xs = touchesOf(e);
-        const { geo: g, window: w, bounds: b, width: W } = live.current;
+        const { window: w, bounds: b, width: W } = live.current;
 
         if (xs.length >= 2) {
           const { c, d } = pinchStats(xs);
@@ -145,31 +198,7 @@ export function TimelineCanvas({ videoId, height, onSelectClipmark, onSkimmerCha
         }
         if (s.kind === 'pinch') return; // wait for release after a pinch
 
-        const x = xs[0] ?? e.nativeEvent.locationX;
-        let cur: Session = s;
-        if (s.kind === 'pending') {
-          if (Math.abs(x - s.x0) < TAP_SLOP) return;
-          const { tl: t, canClip: cc } = live.current;
-          if (s.hit.handle) {
-            const { clip, side } = s.hit.handle;
-            const m = startDrag({ time_start: clip.time_start as number, time_end: clip.time_end as number }, side, clip.id);
-            dispatch(beginClipDrag(clip.id));
-            cur = { kind: 'handle', machine: m };
-          } else if (t.tool === 'clip' && cc && t.clipping.mode === 'idle') {
-            const t0 = g.utcFromX(s.x0);
-            dispatch(beginClipDrag(null));
-            cur = { kind: 'clipCreate', machine: startDrag({ time_start: t0, time_end: t0 }, 'end') };
-          } else {
-            cur = { kind: 'scrub' };
-          }
-          session.current = cur;
-        }
-        if (cur.kind === 'scrub') {
-          setSkimmerCoalesced(g.utcFromX(x));
-        } else if (cur.kind === 'clipCreate' || cur.kind === 'handle') {
-          cur.machine = dragClip(cur.machine, Math.min(b.end, Math.max(b.start, g.utcFromX(x))));
-          setGhost({ a: g.xFromUtc(cur.machine.time_start), b: g.xFromUtc(cur.machine.time_end) });
-        }
+        applyMove(s, xs[0] ?? e.nativeEvent.locationX);
       },
       onPanResponderRelease: (e) => {
         const s = session.current;
@@ -179,13 +208,6 @@ export function TimelineCanvas({ videoId, height, onSelectClipmark, onSkimmerCha
         if (s.kind === 'pinch') {
           dispatch(setZoom(s.live));
           setLiveWindow(null);
-          return;
-        }
-        if (s.kind === 'pending') {
-          if (Date.now() - s.t0 <= TAP_MAX_MS * 3) {
-            if (s.hit.clipmarkId != null) onSelectClipmark(s.hit.clipmarkId);
-            else seek.toUtc(g.utcFromX(s.x0));
-          }
           return;
         }
         if (s.kind === 'scrub') {
@@ -212,8 +234,8 @@ export function TimelineCanvas({ videoId, height, onSelectClipmark, onSkimmerCha
         setSkimmerCoalesced(null);
         if (s && (s.kind === 'clipCreate' || s.kind === 'handle')) dispatch(endClipDrag());
       },
-    }),
-  );
+    });
+  const panHandlers = pan.current.panHandlers;
 
   const currentUtc = useAppSelector((s) => s.player.time.currentUtc);
   const currentVideo = useAppSelector((s) => s.player.time.currentVideo);
@@ -222,9 +244,16 @@ export function TimelineCanvas({ videoId, height, onSelectClipmark, onSkimmerCha
   const skimLabel = skimmer != null && seek.mapper ? formatTime(seek.mapper.utcToVideo(skimmer) ?? 0, false) : '';
 
   return (
-    <View style={[styles.wrap, { height }]} onLayout={(e) => setWidth(Math.round(e.nativeEvent.layout.width))} {...pan.current.panHandlers}>
+    <View style={[styles.wrap, { height }]} onLayout={(e) => setWidth(Math.round(e.nativeEvent.layout.width))} {...panHandlers}>
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={(e) => onTap(e.nativeEvent.locationX)}
+        accessibilityRole="adjustable"
+        accessibilityLabel="Timeline"
+        accessibilityHint="Tap to seek or select an event. Drag sideways to scrub, pinch to zoom."
+      />
       {width > 0 && (
-        <Svg width={width} height={height}>
+        <Svg width={width} height={height} pointerEvents="none">
           <Rect x={0} y={0} width={width} height={height} fill={theme.surface} />
           <G transform={transform ? `translate(${transform.tx},0) scale(${transform.sx},1)` : undefined}>
             <SensorBands segments={sensors} visibility={tl.sensorVisibility} geo={baseGeo} height={height} />
@@ -234,10 +263,10 @@ export function TimelineCanvas({ videoId, height, onSelectClipmark, onSkimmerCha
           {tl.clipmarksVisible && <ClipmarkLayer clipmarks={clipmarks} activeId={tl.activeClipmarkId} geo={geo} height={height} />}
           {(ghost ?? clipInGhost) && <GhostBand x1={(ghost ?? clipInGhost)!.a} x2={(ghost ?? clipInGhost)!.b} height={height} />}
           {activeEditableClip && !ghost && (
-            <ClipHandles x1={geo.xFromUtc(activeEditableClip.time_start as number)} x2={geo.xFromUtc(activeEditableClip.time_end as number)} height={height} />
+            <ClipHandles x1={geo.xFromUtc(activeEditableClip.time_start as number)} x2={geo.xFromUtc(activeEditableClip.time_end as number)} height={height} width={width} />
           )}
-          {skimmer != null && <Skimmer x={geo.xFromUtc(skimmer)} label={skimLabel} height={height} />}
-          {currentUtc != null && <Playhead x={geo.xFromUtc(currentUtc)} label={formatTime(currentVideo ?? 0, false)} height={height} />}
+          {skimmer != null && <Skimmer x={geo.xFromUtc(skimmer)} label={skimLabel} height={height} width={width} />}
+          {currentUtc != null && <Playhead x={geo.xFromUtc(currentUtc)} label={formatTime(currentVideo ?? 0, false)} height={height} width={width} />}
         </Svg>
       )}
     </View>

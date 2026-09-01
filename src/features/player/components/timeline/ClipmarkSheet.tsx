@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { ActionSheetIOS, ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActionSheetIOS, ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { theme } from '@/common/theme';
+import { denseText } from '@/common/typography';
+import { BottomSheet } from '@/common/components/BottomSheet';
 import { Icon } from '@/common/components/Icon';
 import { TextPromptModal } from '@/common/components/TextPromptModal';
 import { formatTime, parseTimestamp } from '@/common/lib/formatTime';
@@ -11,6 +13,7 @@ import { useTimeMapper } from '../../hooks/useTimeMapper';
 import { useSeek } from '../../hooks/useSeek';
 import { canEditClipmark, formatDurationLabel, getEventType } from '../../timeline/clipmarkUtils';
 import { selectCurrentUserId } from '../../timeline/selectors';
+import { touchSlop, verticalTouchSlop } from '@/common/touchTarget';
 
 interface Props {
   clipmarkId: number | null;
@@ -100,18 +103,16 @@ export function ClipmarkSheet({ clipmarkId, videoId, onClose }: Props) {
   };
 
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.card} onPress={() => undefined}>
+    <BottomSheet onClose={onClose} cardStyle={styles.card}>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 12 }}>
             <View style={styles.head}>
               <View style={styles.pill}>
                 <Icon name={type.icon} size={11} color={theme.accentActive} />
-                <Text style={styles.pillText}>{type.label}</Text>
+                <Text {...denseText} style={styles.pillText}>{type.label}</Text>
               </View>
               {isClip && <Text style={styles.dur}>{formatDurationLabel(c)}</Text>}
               <View style={{ flex: 1 }} />
-              <Pressable onPress={onClose} hitSlop={8}><Icon name="xmark" size={16} color={theme.textSecondary} /></Pressable>
+              <Pressable onPress={onClose} hitSlop={touchSlop(16)} accessibilityRole="button" accessibilityLabel="Close event sheet"><Icon name="xmark" size={16} color={theme.textSecondary} /></Pressable>
             </View>
 
             <TextInput style={styles.input} value={text} onChangeText={setText} editable={canEdit} placeholder="Title" placeholderTextColor={theme.textTertiary} />
@@ -135,8 +136,6 @@ export function ClipmarkSheet({ clipmarkId, videoId, onClose }: Props) {
               <Act icon="location-crosshairs" label="Highlight" onPress={() => { dispatch(setActiveClipmark(c.id)); onClose(); }} />
             </View>
           </ScrollView>
-        </Pressable>
-      </Pressable>
       <TextPromptModal
         visible={makeClip}
         title="Create video from clip"
@@ -151,7 +150,7 @@ export function ClipmarkSheet({ clipmarkId, videoId, onClose }: Props) {
           else if (res.payload) Alert.alert('Could not create clip', String(res.payload));
         }}
       />
-    </Modal>
+    </BottomSheet>
   );
 }
 
@@ -161,9 +160,9 @@ function TimeField({ label, value, onChange, editable, onStamp, onSeek }: { labe
       <Text style={styles.timeLabel}>{label}</Text>
       <TextInput style={[styles.input, styles.timeInput]} value={value} onChangeText={onChange} editable={editable} keyboardType="numbers-and-punctuation" placeholder="m:ss" placeholderTextColor={theme.textTertiary} />
       {editable && (
-        <Pressable onPress={onStamp} style={styles.mini} hitSlop={4}><Text style={styles.miniText}>Playhead</Text></Pressable>
+        <Pressable onPress={onStamp} style={styles.mini} hitSlop={verticalTouchSlop(30)}><Text {...denseText} style={styles.miniText}>Playhead</Text></Pressable>
       )}
-      <Pressable onPress={onSeek} style={styles.mini} hitSlop={4}><Icon name="play" size={10} color={theme.textSecondary} /></Pressable>
+      <Pressable onPress={onSeek} style={styles.mini} hitSlop={verticalTouchSlop(30)} accessibilityRole="button" accessibilityLabel={`Seek to ${label.toLowerCase()}`}><Icon name="play" size={10} color={theme.textSecondary} /></Pressable>
     </View>
   );
 }
@@ -173,16 +172,15 @@ function Act({ icon, label, onPress, primary, danger, disabled, busy }: { icon: 
   return (
     <Pressable onPress={onPress} disabled={disabled} style={[styles.act, primary && styles.actPrimary, danger && styles.actDanger, disabled && { opacity: 0.5 }]}>
       {busy ? <ActivityIndicator size="small" color={color} /> : <Icon name={icon} size={12} color={color} />}
-      <Text style={[styles.actText, { color }]}>{label}</Text>
+      <Text {...denseText} style={[styles.actText, { color }]}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  card: { backgroundColor: theme.surface, borderTopLeftRadius: theme.radiusLg, borderTopRightRadius: theme.radiusLg, padding: 16, paddingBottom: 28, maxHeight: '85%' },
+  card: { padding: 16 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  pill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 9, height: 24, borderRadius: theme.radiusPill, backgroundColor: theme.accentTint },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 9, minHeight: 24, borderRadius: theme.radiusPill, backgroundColor: theme.accentTint },
   pillText: { fontSize: 11, fontWeight: '700', color: theme.accentActive },
   dur: { fontSize: 12, color: theme.textSecondary, fontVariant: ['tabular-nums'] },
   input: { borderWidth: 1, borderColor: theme.borderStrong, borderRadius: theme.radiusSm, paddingHorizontal: 10, paddingVertical: 9, fontSize: 14, color: theme.textPrimary },
@@ -191,11 +189,12 @@ const styles = StyleSheet.create({
   timeField: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   timeLabel: { width: 40, fontSize: 12, color: theme.textSecondary },
   timeInput: { flex: 1, paddingVertical: 6, fontVariant: ['tabular-nums'] },
-  mini: { height: 30, paddingHorizontal: 9, borderRadius: theme.radiusSm, borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center' },
+  mini: { minHeight: 30, paddingHorizontal: 9, borderRadius: theme.radiusSm, borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center' },
   miniText: { fontSize: 11, fontWeight: '600', color: theme.textSecondary },
   err: { color: theme.danger, fontSize: 12 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  act: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border },
+  // UI-024: a WRAPPING row (gap 8) — slop would overlap the row below it, so 44pt is real.
+  act: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, paddingHorizontal: 12, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border },
   actPrimary: { backgroundColor: theme.accent, borderColor: theme.accent },
   actDanger: { borderColor: theme.danger },
   actText: { fontSize: 12, fontWeight: '600' },

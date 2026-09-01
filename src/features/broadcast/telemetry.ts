@@ -41,6 +41,12 @@ export class TelemetryQueue {
     return this.queue.length;
   }
 
+  /** Drop everything queued — the broadcast is over, so these fixes can never be delivered (SEC-022). */
+  clear(): void {
+    this.dropped += this.queue.length;
+    this.queue = [];
+  }
+
   /** Send everything queued; on failure keep the batch for the next flush. */
   async flush(send: (fixes: TelemetryFix[]) => Promise<unknown>): Promise<number> {
     if (this.queue.length === 0) return 0;

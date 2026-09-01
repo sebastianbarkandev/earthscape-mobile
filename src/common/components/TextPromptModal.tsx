@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { theme } from '@/common/theme';
+import { BottomSheet } from './BottomSheet';
 
 interface Props {
   visible: boolean;
@@ -34,9 +35,11 @@ export function TextPromptModal({
   }, [visible, initialValue]);
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <Pressable style={styles.backdrop} onPress={onCancel}>
-        <Pressable style={styles.card} onPress={() => undefined}>
+    <BottomSheet visible={visible} onClose={onCancel} animationType="fade" placement="center" cardStyle={styles.card}>
+      {/* REG-003: the card is capped at 0.88 x window height and the input is autoFocused, so
+          in landscape the keyboard leaves ~190pt for a ~265pt dialog. Without a scroll region
+          the Cancel/Save row is simply not reachable — same shape as the map-layers sheet. */}
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
           <Text style={styles.title}>{title}</Text>
           {message ? <Text style={styles.message}>{message}</Text> : null}
           <TextInput
@@ -59,15 +62,15 @@ export function TextPromptModal({
               <Text style={[styles.btnText, styles.btnPrimaryText]}>{confirmLabel}</Text>
             </Pressable>
           </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+      </ScrollView>
+    </BottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
-  card: { backgroundColor: theme.surface, borderRadius: theme.radiusLg, padding: 20, gap: 12 },
+  card: { padding: 20 },
+  // The children's gap moved here with them: the card now lays out one child (the ScrollView).
+  body: { gap: 12 },
   title: { fontSize: 16, fontWeight: '700', color: theme.textPrimary },
   message: { fontSize: 13, color: theme.textSecondary },
   input: {
@@ -81,7 +84,9 @@ const styles = StyleSheet.create({
   },
   inputMultiline: { minHeight: 90, textAlignVertical: 'top' },
   row: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
-  btn: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: theme.radiusPill },
+  // UI-022: paddingVertical + a 14pt label was ~35pt, and a text Pressable was invisible to
+  // the touch-target guard — state the box.
+  btn: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, borderRadius: theme.radiusPill },
   btnPrimary: { backgroundColor: theme.accent },
   btnDanger: { backgroundColor: theme.danger },
   btnText: { fontSize: 14, fontWeight: '600', color: theme.textSecondary },

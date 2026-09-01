@@ -31,18 +31,29 @@ type Options = {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   headers?: Record<string, string>;
-  /** Override the origin — only for the org-less lookup on api.{baseDomain}. */
+  /** Override the origin — the org-less lookup on api.{baseDomain}, or a pending sign-out owed to another org (SEC-015). */
   host?: string;
+  /**
+   * Fail (and abort) the request after this many ms. Off by default — iOS URLSession then
+   * runs to its own ~60 s. Pass it wherever a stalled request would hold something the user
+   * is waiting behind: a captive portal answers the TCP connect and then nothing at all
+   * (REG-001).
+   */
+  timeoutMs?: number;
 };
 
 export async function api<T = unknown>(path: string, opts: Options = {}): Promise<T> {
-  const { method = 'GET', body, headers = {}, host } = opts;
+  const { method = 'GET', body, headers = {}, host, timeoutMs } = opts;
   const origin = host ?? getApiHost();
   if (!origin) {
     // Would otherwise fetch a relative URL and fail somewhere less obvious.
     throw new ApiError(0, null, 'No organization resolved yet — cannot build a request URL.');
   }
-  const res = await fetch(`${origin}${path}`, {
+  // A timeout both aborts the request (frees the socket) and rejects here, so a caller
+  // that must stay responsive is never left waiting on a promise fetch may never settle.
+  const controller = timeoutMs != null ? new AbortController() : null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const pending = fetch(`${origin}${path}`, {
     method,
     credentials: 'include',
     headers: {
@@ -57,7 +68,24 @@ export async function api<T = unknown>(path: string, opts: Options = {}): Promis
       ...headers,
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: controller?.signal,
   });
+
+  let res: Response;
+  try {
+    res =
+      timeoutMs == null
+        ? await pending
+        : await new Promise<Response>((resolve, reject) => {
+            timer = setTimeout(() => {
+              controller?.abort();
+              reject(new Error(`Request timed out after ${timeoutMs} ms: ${method} ${path}`));
+            }, timeoutMs);
+            pending.then(resolve, reject);
+          });
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 
   const text = await res.text();
   let json: unknown = null;

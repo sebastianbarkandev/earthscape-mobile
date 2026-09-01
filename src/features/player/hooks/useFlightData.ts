@@ -5,7 +5,9 @@ import { appendGraphs } from '../graphSlice';
 import { getFlightData } from '../api';
 import { ApiError } from '@/common/api/client';
 
-const LIVE_POLL_MS = 7000;
+export const LIVE_POLL_MS = 7000;
+/** 403 backoff ceiling (the permission quirk below can be a steady state, not a transition). */
+export const FORBIDDEN_MAX_MS = 60000;
 
 /**
  * Port of the web's fetchMoreFlightPoints loop:
@@ -14,58 +16,87 @@ const LIVE_POLL_MS = 7000;
  * no new tail; while live, keep polling on an interval.
  * Note the permission quirk: this endpoint checks LIVESTREAMS READ while the
  * stream is live and VIDEOS READ otherwise (a 403 during transition = reload).
+ *
+ * Multi-program: every piece of per-run state (in-flight flag, cancellation,
+ * last utc) lives INSIDE the effect closure, keyed to the videoId that started
+ * it — a late response from the previous program can never be appended under
+ * the new one, and swapping never skips the new program's initial fetch.
+ * The store's mapData always belongs to the active video (playerSlice drops it
+ * on setActiveVideo / loadEvent), so a re-run for the same video (live<->VOD
+ * flip) continues from the store's lastUtc instead of refetching the history.
  */
 /**
  * @param onForbidden CLAUDE.md quirk: flight_data checks LIVESTREAMS READ while live and VIDEOS READ
- * otherwise — a 403 mid-transition means "reload the event", not a client bug.
+ * otherwise — a 403 mid-transition means "refresh the event", not a client bug. Called once per
+ * run; subsequent 403s only back off (7s doubling, capped at 60s) while the video is live.
  */
 export function useFlightData(videoId: number | null, onForbidden?: () => void) {
   const dispatch = useAppDispatch();
   const isLive = useAppSelector((s) => s.player.isLive);
-  const lastUtcRef = useRef<number | null>(null);
-  const inFlight = useRef(false);
-  const cancelled = useRef(false);
+  const storeLastUtc = useAppSelector((s) => s.player.mapData.lastUtc);
+  const storeLastUtcRef = useRef<number | null>(storeLastUtc);
+  storeLastUtcRef.current = storeLastUtc;
+  const onForbiddenRef = useRef(onForbidden);
+  onForbiddenRef.current = onForbidden;
 
   useEffect(() => {
     if (!videoId) return;
-    cancelled.current = false;
-    lastUtcRef.current = null;
+    const id = videoId;
+    let cancelled = false;
+    let inFlight = false;
+    let lastUtc: number | null = storeLastUtcRef.current;
+    let forbiddenCount = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const schedule = (ms: number) => {
+      if (cancelled) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(fetchLoop, ms);
+    };
 
     async function fetchLoop() {
-      if (inFlight.current || cancelled.current) return;
-      inFlight.current = true;
+      if (inFlight || cancelled) return;
+      inFlight = true;
+      let nextDelay: number | null = isLive ? LIVE_POLL_MS : null;
       try {
-        let after = lastUtcRef.current ?? undefined;
+        let after = lastUtc ?? undefined;
         // Loop until the server stops advancing last_flight_point_utc.
         // Bounded to avoid runaway loops on malformed data.
         for (let i = 0; i < 200; i++) {
-          if (cancelled.current) return;
-          const res = await getFlightData(videoId!, after);
+          if (cancelled) return;
+          const res = await getFlightData(id, after);
+          if (cancelled) return; // swapped/unmounted while awaiting: never append under another id
           const fd = res?.flight_data;
           if (!fd || fd.last_flight_point_utc == null) break;
           dispatch(appendFlightData(fd));
           if (fd.graphs) dispatch(appendGraphs(fd.graphs));
           if (after !== undefined && fd.last_flight_point_utc <= after) break;
           after = fd.last_flight_point_utc;
-          lastUtcRef.current = after;
+          lastUtc = after;
         }
+        forbiddenCount = 0;
       } catch (e) {
-        if (e instanceof ApiError && e.status === 403 && onForbidden) {
-          onForbidden();
-          return;
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 403) {
+          if (forbiddenCount === 0) onForbiddenRef.current?.();
+          forbiddenCount += 1;
+          // Steady-state 403 (VIDEOS but no LIVESTREAMS permission): back off instead of storming.
+          nextDelay = isLive ? Math.min(LIVE_POLL_MS * 2 ** forbiddenCount, FORBIDDEN_MAX_MS) : null;
+        } else {
+          // Non-fatal: map simply stops updating; heartbeat handles live<->VOD flips.
+          // Log the status only — an ApiError carries the response body (SEC-018).
+          console.warn('flight data fetch failed', e instanceof ApiError ? `HTTP ${e.status}` : e);
         }
-        // Non-fatal: map simply stops updating; heartbeat handles live<->VOD flips.
-        console.warn('flight data fetch failed', e);
       } finally {
-        inFlight.current = false;
+        inFlight = false;
+        if (nextDelay != null) schedule(nextDelay);
       }
     }
 
     fetchLoop();
-    const timer = isLive ? setInterval(fetchLoop, LIVE_POLL_MS) : null;
     return () => {
-      cancelled.current = true;
-      if (timer) clearInterval(timer);
+      cancelled = true;
+      if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId, isLive, dispatch]);

@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { ActionSheetIOS, Alert, Platform, Pressable, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { theme } from '@/common/theme';
+import { denseText } from '@/common/typography';
 import { Icon } from '@/common/components/Icon';
 import { getApiHost } from '@/common/config';
 import { formatDate } from '@/common/lib/formatTime';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import type { ShareToken } from '../../api';
 import { createShareToken } from '../../eventThunks';
+import { touchSlop } from '@/common/touchTarget';
 
 /** Web PublicShareTab expiration ladder (days; 0 = never). */
 const EXPIRATION_DAYS = [0, 1, 2, 3, 5, 7, 14, 30, 60, 90];
@@ -72,10 +74,10 @@ export function PublicShareTab() {
         </View>
         <Text style={styles.label}>Share link</Text>
         <View style={styles.linkBar}>
-          <Text style={styles.linkText} numberOfLines={1} selectable>{url}</Text>
-          <Pressable onPress={copy} style={[styles.copyBtn, copied && styles.copyBtnDone]} hitSlop={4}>
+          <Text {...denseText} style={styles.linkText} numberOfLines={1} selectable>{url}</Text>
+          <Pressable onPress={copy} style={[styles.copyBtn, copied && styles.copyBtnDone]} hitSlop={touchSlop(30)}>
             <Icon name={copied ? 'check' : 'copy'} size={12} color={theme.textOnAccent} />
-            <Text style={styles.copyText}>{copied ? 'Copied' : 'Copy'}</Text>
+            <Text {...denseText} style={styles.copyText}>{copied ? 'Copied' : 'Copy'}</Text>
           </Pressable>
         </View>
         <View style={styles.settings}>
@@ -84,13 +86,13 @@ export function PublicShareTab() {
           {created.shared_with ? <Setting icon="envelope" label="Sent to" value={String(created.shared_with)} /> : null}
         </View>
         <View style={styles.actions}>
-          <Pressable onPress={() => Share.share({ url, message: url }).catch(() => undefined)} style={styles.secondary}>
+          <Pressable hitSlop={touchSlop(40)} onPress={() => Share.share({ url, message: url }).catch(() => undefined)} style={styles.secondary}>
             <Icon name="share" size={12} color={theme.textPrimary} />
-            <Text style={styles.secondaryText}>Share…</Text>
+            <Text {...denseText} style={styles.secondaryText}>Share…</Text>
           </Pressable>
           <View style={{ flex: 1 }} />
-          <Pressable onPress={() => setCreated(null)} style={styles.primary}>
-            <Text style={styles.primaryText}>Done</Text>
+          <Pressable hitSlop={touchSlop(40)} onPress={() => setCreated(null)} style={styles.primary}>
+            <Text {...denseText} style={styles.primaryText}>Done</Text>
           </Pressable>
         </View>
         <Text style={styles.muted}>Public links cannot be revoked from the app.</Text>
@@ -109,8 +111,8 @@ export function PublicShareTab() {
       </View>
 
       <Text style={styles.label}>Link expiration</Text>
-      <Pressable onPress={pickExpiration} style={styles.select}>
-        <Text style={styles.selectText}>{expirationLabel(days)}</Text>
+      <Pressable hitSlop={touchSlop(40)} onPress={pickExpiration} style={styles.select}>
+        <Text {...denseText} style={styles.selectText}>{expirationLabel(days)}</Text>
         <Icon name="chevron-down" size={10} color={theme.textTertiary} />
       </Pressable>
       <Text style={styles.help}>{expiresAt ? `Will expire on ${formatDate(expiresAt, tz)}.` : 'Will never expire.'}</Text>
@@ -128,9 +130,9 @@ export function PublicShareTab() {
         </Pressable>
       )}
       {error && <Text style={styles.error}>{error}</Text>}
-      <Pressable onPress={create} disabled={busy} style={[styles.primary, styles.primaryWide, busy && { opacity: 0.6 }]}>
+      <Pressable hitSlop={touchSlop(40)} onPress={create} disabled={busy} style={[styles.primary, styles.primaryWide, busy && { opacity: 0.6 }]}>
         <Icon name="globe" size={12} color={theme.textOnAccent} />
-        <Text style={styles.primaryText}>Create share link</Text>
+        <Text {...denseText} style={styles.primaryText}>Create share link</Text>
       </Pressable>
     </View>
   );
@@ -149,13 +151,13 @@ function Setting({ icon, label, value }: { icon: React.ComponentProps<typeof Ico
 const styles = StyleSheet.create({
   wrap: { gap: 10 },
   muted: { fontSize: 12, color: theme.textTertiary },
-  banner: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: theme.radiusMd, backgroundColor: '#EAF4EA', borderWidth: 1, borderColor: '#CFE6CF' },
+  banner: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: theme.radiusMd, backgroundColor: theme.successTint, borderWidth: 1, borderColor: theme.successBorder },
   bannerTitle: { fontSize: 13, fontWeight: '700', color: theme.success },
   bannerSub: { fontSize: 12, color: theme.textSecondary, marginTop: 2 },
   label: { fontSize: 11, fontWeight: '700', color: theme.textTertiary, textTransform: 'uppercase', letterSpacing: 0.4 },
-  linkBar: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: theme.borderStrong, borderRadius: theme.radiusSm, paddingLeft: 10, paddingRight: 4, height: 40 },
+  linkBar: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: theme.borderStrong, borderRadius: theme.radiusSm, paddingLeft: 10, paddingRight: 4, minHeight: 40 },
   linkText: { flex: 1, fontSize: 13, color: theme.textPrimary },
-  copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 30, paddingHorizontal: 12, borderRadius: theme.radiusSm, backgroundColor: theme.accent },
+  copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 30, paddingHorizontal: 12, borderRadius: theme.radiusSm, backgroundColor: theme.accent },
   copyBtnDone: { backgroundColor: theme.success },
   copyText: { color: theme.textOnAccent, fontSize: 12, fontWeight: '700' },
   settings: { gap: 6 },
@@ -163,18 +165,18 @@ const styles = StyleSheet.create({
   settingLabel: { fontSize: 12, color: theme.textSecondary, width: 70 },
   settingValue: { flex: 1, fontSize: 12, color: theme.textPrimary, fontWeight: '600' },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  primary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 40, paddingHorizontal: 18, borderRadius: theme.radiusPill, backgroundColor: theme.accent },
+  primary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 40, paddingHorizontal: 18, borderRadius: theme.radiusPill, backgroundColor: theme.accent },
   primaryWide: { alignSelf: 'stretch' },
   primaryText: { color: theme.textOnAccent, fontWeight: '700', fontSize: 13 },
-  secondary: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 40, paddingHorizontal: 14, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border },
+  secondary: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 40, paddingHorizontal: 14, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border },
   secondaryText: { color: theme.textPrimary, fontWeight: '600', fontSize: 13 },
-  warning: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: theme.radiusMd, backgroundColor: theme.accentTint, borderWidth: 1, borderColor: '#FFD9BF' },
+  warning: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: theme.radiusMd, backgroundColor: theme.accentTint, borderWidth: 1, borderColor: theme.accentBorder },
   warningTitle: { fontSize: 13, fontWeight: '700', color: theme.accentActive },
   warningText: { fontSize: 12, color: theme.textSecondary, marginTop: 2 },
-  select: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 40, paddingHorizontal: 12, borderWidth: 1, borderColor: theme.borderStrong, borderRadius: theme.radiusSm },
+  select: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 40, paddingHorizontal: 12, borderWidth: 1, borderColor: theme.borderStrong, borderRadius: theme.radiusSm },
   selectText: { fontSize: 14, color: theme.textPrimary },
   help: { fontSize: 11, color: theme.textTertiary, marginTop: -4 },
-  input: { height: 40, paddingHorizontal: 12, borderWidth: 1, borderColor: theme.borderStrong, borderRadius: theme.radiusSm, fontSize: 14, color: theme.textPrimary },
+  input: { minHeight: 40, paddingHorizontal: 12, borderWidth: 1, borderColor: theme.borderStrong, borderRadius: theme.radiusSm, fontSize: 14, color: theme.textPrimary },
   checkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 4 },
   checkTitle: { fontSize: 13, fontWeight: '700', color: theme.textPrimary, marginBottom: 2 },
   error: { fontSize: 12, color: theme.danger },

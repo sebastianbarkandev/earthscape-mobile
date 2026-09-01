@@ -94,3 +94,35 @@ export function transformFor(base: Window, view: Window, width: number): { tx: n
 export function isFullWindow(win: Window, b: Bounds, eps = 1e-6): boolean {
   return Math.abs(win.left - b.start) < eps && Math.abs(win.right - b.end) < eps;
 }
+
+/** Approximate width of an SVG label — FA-free metrics: ~0.6em per glyph for the digits/colons we draw. */
+export function labelWidth(label: string, fontSize: number): number {
+  return Math.max(0, label.length) * fontSize * 0.6;
+}
+
+/**
+ * Where to draw a marker's label so it stays inside the canvas (UI-016). The playhead and
+ * skimmer labels were drawn at `x + 4` with the default `text-anchor: start`, so at the
+ * right edge — exactly where the playhead lives on a live stream, and where the skimmer
+ * ends up when you scrub to the end — the time was cut off by the SVG viewport. Flip the
+ * label to the left of the line when it would not fit on the right.
+ */
+export function labelPlacement(
+  x: number,
+  canvasWidth: number,
+  label: string,
+  fontSize: number,
+  pad = 4,
+): { x: number; anchor: 'start' | 'end' } {
+  const w = labelWidth(label, fontSize);
+  if (x + pad + w <= canvasWidth) return { x: x + pad, anchor: 'start' };
+  if (x - pad - w >= 0) return { x: x - pad, anchor: 'end' };
+  // Narrower than the label either way: pin it inside the canvas rather than off the edge.
+  return { x: Math.max(pad, canvasWidth - pad), anchor: 'end' };
+}
+
+/** Keep a grip/handle of half-width `half` fully inside [0, canvasWidth] (UI-016). */
+export function clampToCanvas(x: number, canvasWidth: number, half: number): number {
+  if (!Number.isFinite(x)) return half;
+  return Math.min(Math.max(x, half), Math.max(half, canvasWidth - half));
+}

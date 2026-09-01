@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ActionSheetIOS, ActivityIndicator, Alert, Image, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { theme } from '@/common/theme';
+import { denseText } from '@/common/typography';
 import { Icon, type IconName } from '@/common/components/Icon';
 import { LiveBadge } from '@/common/components/LiveBadge';
 import { TextPromptModal } from '@/common/components/TextPromptModal';
@@ -13,6 +14,7 @@ import type { EventVideo } from '../api';
 import type { VideoCapabilities, DashboardLayout } from '../videoCapabilities';
 import { clearOpFeedback, setLayout, toggleMapOption } from '../playerSlice';
 import { downloadVideo, suggestDeletion, takeScreenshot, updateEventInfo } from '../eventThunks';
+import { touchSlop, verticalTouchSlop } from '@/common/touchTarget';
 
 interface Props {
   video: EventVideo;
@@ -90,7 +92,7 @@ export function ActionRow({ video, caps, layout, layoutLocked, clipmarkCount, on
     <View style={styles.wrap}>
       <View style={styles.lede}>
         <View style={styles.avatar}>
-          {avatar ? <Image source={{ uri: avatar }} style={styles.avatarImg} /> : <Text style={styles.avatarText}>{initialsOf(userName)}</Text>}
+          {avatar ? <Image source={{ uri: avatar }} style={styles.avatarImg} /> : <Text {...denseText} style={styles.avatarText}>{initialsOf(userName)}</Text>}
         </View>
         <View style={{ flex: 1 }}>
           <View style={styles.titleRow}>
@@ -106,7 +108,7 @@ export function ActionRow({ video, caps, layout, layoutLocked, clipmarkCount, on
             {video.live_stream_state === 'live' && <LiveBadge />}
             {video.live_stream_state === 'processing' && (
               <View style={styles.endedBadge}>
-                <Text style={styles.endedText}>Live ended</Text>
+                <Text style={styles.endedText} {...denseText}>Live ended</Text>
               </View>
             )}
           </View>
@@ -118,14 +120,18 @@ export function ActionRow({ video, caps, layout, layoutLocked, clipmarkCount, on
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.actions}>
         {!layoutLocked && (
-          <View style={styles.segmented}>
+          <View style={styles.segmented} accessibilityRole="tablist">
             {(['video', 'split', 'map'] as DashboardLayout[]).map((l) => (
               <Pressable
                 key={l}
                 onPress={() => dispatch(setLayout(l))}
                 style={[styles.segment, layout === l && styles.segmentActive]}
+                hitSlop={verticalTouchSlop(32)}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: layout === l }}
+                accessibilityLabel={`${l === 'video' ? 'Video' : l === 'split' ? 'Split' : 'Map'} layout`}
               >
-                <Text style={[styles.segmentText, layout === l && styles.segmentTextActive]}>
+                <Text style={[styles.segmentText, layout === l && styles.segmentTextActive]} {...denseText}>
                   {l === 'video' ? 'Video' : l === 'split' ? 'Split' : 'Map'}
                 </Text>
               </Pressable>
@@ -142,8 +148,22 @@ export function ActionRow({ video, caps, layout, layoutLocked, clipmarkCount, on
             onPress={() => dispatch(downloadVideo(undefined))}
           />
         )}
-        <ActionButton icon="camera" label="Screenshot" busy={op.busy === 'screenshot'} onPress={() => dispatch(takeScreenshot())} />
-        <ActionButton icon="ellipsis-vertical" onPress={openMore} />
+        {/* LIVE-021: the screenshot endpoint 404s for a video without `duration` — every live
+            program AND the whole `processing` transcode window after a phone stops publishing
+            (caps.canScreenshot mirrors the backend's own rule) — show WHY instead of a button
+            that can only fail. */}
+        {!caps.canScreenshot ? (
+          <ActionButton
+            icon="camera"
+            label="Screenshot"
+            muted
+            a11yHint={caps.isLive ? 'Unavailable while this program is live' : 'Unavailable until the recording is ready'}
+            onPress={() => Alert.alert(caps.isLive ? 'Not available while live' : 'Not available yet', 'Screenshots can be taken once the live recording is ready.')}
+          />
+        ) : (
+          <ActionButton icon="camera" label="Screenshot" busy={op.busy === 'screenshot'} onPress={() => dispatch(takeScreenshot())} />
+        )}
+        <ActionButton icon="ellipsis-vertical" a11yLabel="More actions" onPress={openMore} />
       </ScrollView>
 
       <TextPromptModal
@@ -174,11 +194,20 @@ export function ActionRow({ video, caps, layout, layoutLocked, clipmarkCount, on
   );
 }
 
-function ActionButton({ icon, label, onPress, busy, accent }: { icon: IconName; label?: string; onPress: () => void; busy?: boolean; accent?: boolean }) {
+function ActionButton({ icon, label, a11yLabel, a11yHint, onPress, busy, accent, muted }: { icon: IconName; label?: string; /** Icon-only buttons: what VoiceOver says (RESP-009). */ a11yLabel?: string; a11yHint?: string; onPress: () => void; busy?: boolean; accent?: boolean; /** Action the backend cannot serve right now: dimmed, still tappable so the press can explain why. */ muted?: boolean }) {
   return (
-    <Pressable onPress={onPress} disabled={busy} style={({ pressed }) => [styles.action, accent && styles.actionAccent, pressed && styles.actionPressed]} hitSlop={4}>
-      {busy ? <ActivityIndicator size="small" color={theme.textSecondary} /> : <Icon name={icon} size={14} color={accent ? theme.textOnAccent : theme.textPrimary} />}
-      {label ? <Text style={[styles.actionLabel, accent && { color: theme.textOnAccent }]}>{label}</Text> : null}
+    <Pressable
+      onPress={onPress}
+      disabled={busy}
+      style={({ pressed }) => [styles.action, accent && styles.actionAccent, muted && styles.actionMuted, pressed && styles.actionPressed]}
+      hitSlop={touchSlop(36)}
+      accessibilityRole="button"
+      accessibilityLabel={a11yLabel ?? label}
+      accessibilityHint={a11yHint}
+      accessibilityState={{ busy: !!busy, disabled: !!busy }}
+    >
+      {busy ? <ActivityIndicator size="small" color={theme.textSecondary} /> : <Icon name={icon} size={14} color={accent ? theme.textOnAccent : muted ? theme.textTertiary : theme.textPrimary} />}
+      {label ? <Text style={[styles.actionLabel, accent && { color: theme.textOnAccent }, muted && { color: theme.textTertiary }]} {...denseText}>{label}</Text> : null}
     </Pressable>
   );
 }
@@ -186,7 +215,7 @@ function ActionButton({ icon, label, onPress, busy, accent }: { icon: IconName; 
 const styles = StyleSheet.create({
   wrap: { backgroundColor: theme.surface, borderBottomWidth: 1, borderBottomColor: theme.border, paddingTop: 10, paddingBottom: 8, gap: 10 },
   lede: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingHorizontal: 12 },
-  avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: theme.accentTint, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  avatar: { width: 36, height: 36, borderRadius: theme.radiusPill, backgroundColor: theme.accentTint, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   avatarImg: { width: 36, height: 36 },
   avatarText: { color: theme.accentActive, fontWeight: '700', fontSize: 13 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -194,14 +223,19 @@ const styles = StyleSheet.create({
   endedBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: theme.radiusPill, backgroundColor: theme.bgActive },
   endedText: { fontSize: 11, fontWeight: '700', color: theme.textSecondary },
   meta: { fontSize: 12, color: theme.textSecondary, marginTop: 2 },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12 },
-  segmented: { flexDirection: 'row', backgroundColor: theme.bgSubtle, borderRadius: theme.radiusPill, padding: 3 },
-  segment: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: theme.radiusPill },
+  // UI-023: the strip's frame CLIPS hit-testing, so its own vertical padding (not the
+  // children's hitSlop) is what makes a 36pt-tall child a 44pt target inside a ScrollView.
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 4 },
+  segmented: { flexDirection: 'row', backgroundColor: theme.bgSubtle, borderRadius: theme.radiusPill, padding: 2 },
+  // UI-022: a text-sized box (paddingVertical + a 12pt label) was ~26pt; 32 + the strip's
+  // padding is 44. The slop is vertical-only — the three segments sit at gap 0 (UI-024).
+  segment: { minHeight: 32, paddingHorizontal: 12, justifyContent: 'center', borderRadius: theme.radiusPill },
   segmentActive: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border },
   segmentText: { fontSize: 12, fontWeight: '600', color: theme.textSecondary },
   segmentTextActive: { color: theme.textPrimary },
-  action: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surface },
+  action: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 36, paddingHorizontal: 12, borderRadius: theme.radiusPill, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surface },
   actionPressed: { backgroundColor: theme.bgSubtle },
+  actionMuted: { backgroundColor: theme.bgSubtle, borderColor: theme.border },
   actionAccent: { backgroundColor: theme.liveRed, borderColor: theme.liveRed },
   actionLabel: { fontSize: 12, fontWeight: '600', color: theme.textPrimary },
 });

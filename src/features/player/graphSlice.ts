@@ -1,6 +1,7 @@
 import { createSlice, current, PayloadAction } from '@reduxjs/toolkit';
 import { mergeGraphData, type GraphData } from '@/common/lib/mergeGraphData';
-import { loadEvent, resetPlayer } from './playerSlice';
+import { sanitizeGraphData } from '@/common/sanitizeGraphData';
+import { loadEvent, resetPlayer, setActiveVideo } from './playerSlice';
 
 /**
  * Slim port of the web graphSlice: `data` = merged {category:{name:series}} from
@@ -23,7 +24,8 @@ const graphSlice = createSlice({
     appendGraphs(state, { payload }: PayloadAction<GraphData | null | undefined>) {
       if (!payload) return;
       // mergeGraphData concats series; run it on plain objects, not immer drafts.
-      state.data = mergeGraphData(current(state).data, payload);
+      // Strip __proto__/constructor/prototype keys first — the verbatim lib writes server keys as-is (SEC-008).
+      state.data = mergeGraphData(current(state).data, sanitizeGraphData(payload));
     },
     toggleGraph(state, { payload }: PayloadAction<{ category: string; name: string }>) {
       const list = state.active[payload.category] ?? [];
@@ -40,6 +42,10 @@ const graphSlice = createSlice({
   extraReducers: (b) => {
     // New event: drop the series but keep the user's selection (live<->VOD reloads happen mid-view).
     b.addCase(loadEvent.pending, (s) => {
+      s.data = {};
+    });
+    // Program swap: the series belong to the previous video (playerSlice drops mapData the same way).
+    b.addCase(setActiveVideo, (s) => {
       s.data = {};
     });
     b.addCase(resetPlayer, () => initialState);

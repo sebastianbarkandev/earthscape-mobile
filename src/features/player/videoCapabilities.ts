@@ -9,10 +9,24 @@ export interface VideoCapabilities {
   isLive: boolean; // live_stream_state === 'live'
   isLiveish: boolean; // any live_stream_state except recording_ready (web DownloadButton.isLive)
   canSeek: boolean;
+  /**
+   * LIVE-021: `POST /videos/{id}/screenshot` is `abort(404)` while `not video.duration`
+   * (backend videos_api.take_screenshot). `duration` is filled in when the recording is
+   * transcoded, so it is NULL for `live` AND for the whole `processing` window after a phone
+   * stops publishing — gating on liveness alone re-enables the action minutes too early.
+   */
+  canScreenshot: boolean;
   canEdit: boolean; // permissions.videos.update
   canDelete: boolean; // permissions.videos.delete -> "Suggest deletion" (web shell semantics)
   canDownload: boolean; // permissions.videos.download
-  showDownload: boolean; // !isLive && download_url
+  /**
+   * LIVE-034 (sibling of canScreenshot): the recording does not exist for the WHOLE
+   * `processing` window either — `download_url` is the presigned uploads key the transcode
+   * chain has not written yet (cloud orgs return the URL unconditionally), so a download
+   * offered there can only fail. `isLiveish` is the web DownloadButton rule: everything
+   * except `recording_ready` is "not downloadable yet".
+   */
+  showDownload: boolean; // !isLiveish && download_url
   canShare: boolean; // permissions.videos.share
   canClip: boolean; // signed-in user (web ButtonBar no-ops when config.current_user is null)
   canCreateTags: boolean;
@@ -35,10 +49,11 @@ export function videoCapabilities(
     isLive,
     isLiveish,
     canSeek: !isLive,
+    canScreenshot: !!video?.duration,
     canEdit: !!p?.update,
     canDelete: !!p?.delete,
     canDownload: !!p?.download,
-    showDownload: !isLive && !!video?.download_url,
+    showDownload: !isLiveish && !!video?.download_url,
     canShare: !!p?.share,
     canClip: signedIn,
     canCreateTags: !!permissions?.tags?.create && (features?.tags_enabled ?? true),

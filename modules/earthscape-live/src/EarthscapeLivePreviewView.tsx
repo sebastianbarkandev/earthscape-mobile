@@ -22,4 +22,10 @@ export function EarthscapeLivePreviewView(props: EarthscapeLivePreviewViewProps)
   return <NativeView {...props} />;
 }
 
+// The ONE colour literal outside `src/common/theme.ts`, and deliberately so: this is a
+// separate private package (its own package.json + podspec) that the app depends on, never
+// the other way round — importing `@/common/theme` here would invert that and tie the native
+// module to the app's path aliases. It is also not a themed surface: it stands in for the
+// camera feed, which is pure black when there is no signal. Pinned by
+// src/common/__tests__/themeTokens.test.ts case D3.
 const styles = StyleSheet.create({ fallback: { backgroundColor: '#000' } });

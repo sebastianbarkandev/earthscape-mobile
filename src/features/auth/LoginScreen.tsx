@@ -4,15 +4,18 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { theme } from '@/common/theme';
 import { getHostLabel } from '@/common/config';
+import { edgePadding } from '@/common/layout';
 import { chooseOrg, login } from './authSlice';
 
 /**
@@ -24,6 +27,7 @@ import { chooseOrg, login } from './authSlice';
 export function LoginScreen() {
   const dispatch = useAppDispatch();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const status = useAppSelector((s) => s.auth.status);
   const error = useAppSelector((s) => s.auth.error);
   const organizations = useAppSelector((s) => s.auth.organizations);
@@ -52,6 +56,15 @@ export function LoginScreen() {
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      {/* RESP-023: the card must SCROLL. Landscape + keyboard leaves ~213pt for a ~290pt card,
+          and a multi-org picker (an email in >1 org) is taller than an SE screen — without a
+          scroll region the Sign in button / the last organizations are simply unreachable. */}
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, edgePadding(insets, 24), { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
       <View style={styles.card}>
         <Text style={styles.brand}>Earthscape</Text>
         <Text style={styles.tagline}>{picking ? 'Choose your organization' : 'Sign in'}</Text>
@@ -63,7 +76,10 @@ export function LoginScreen() {
                 key={org.subdomain}
                 onPress={() => pick(org.subdomain)}
                 disabled={busy}
-                style={({ pressed }) => [styles.orgRow, pressed && styles.orgRowPressed]}
+                style={({ pressed }) => [styles.orgRow, pressed && styles.orgRowPressed, busy && styles.orgRowDisabled]}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: busy }}
+                accessibilityLabel={`${org.name} (${org.subdomain})`}
               >
                 <Text style={styles.orgName}>{org.name}</Text>
                 <Text style={styles.orgSubdomain}>{org.subdomain}</Text>
@@ -115,6 +131,7 @@ export function LoginScreen() {
 
         {__DEV__ && <Text style={styles.devNote}>Backend: {getHostLabel()}</Text>}
       </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
@@ -123,9 +140,12 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: theme.bg,
+  },
+  scroll: { flex: 1 },
+  content: {
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
   },
   card: {
     width: '100%',
@@ -157,6 +177,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   orgRowPressed: { backgroundColor: theme.accentTint, borderColor: theme.accent },
+  /** UI-019: a disabled row that looks enabled reads as a dead tap during the second sign-in. */
+  orgRowDisabled: { opacity: 0.5 },
   orgName: { fontSize: 15, fontWeight: '600', color: theme.textPrimary },
   orgSubdomain: { fontSize: 12, color: theme.textTertiary, marginTop: 2 },
   error: { color: theme.danger, fontSize: 13 },

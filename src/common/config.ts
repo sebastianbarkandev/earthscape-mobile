@@ -65,17 +65,53 @@ export function composeLookupHost(
 
 let currentSubdomain = '';
 
-export function setSubdomain(subdomain: string) {
-  currentSubdomain = subdomain.trim().toLowerCase();
+/**
+ * One RFC 1123 hostname label (the backend's own Organization.subdomain rule,
+ * app/forms/superadmin/organizations.py). The subdomain becomes part of the origin
+ * that receives the user's PASSWORD, so anything that could smuggle a path, port,
+ * userinfo or another host (`evil.com/`, `a:b`, `x?y`) must never be accepted.
+ */
+export const SUBDOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** Trim + lowercase, then validate. Returns null when the value is not a safe label. */
+export function normalizeSubdomain(subdomain: string | null | undefined): string | null {
+  const s = (subdomain ?? '').trim().toLowerCase();
+  return SUBDOMAIN_RE.test(s) ? s : null;
+}
+
+/**
+ * Set the org label. Returns false — and leaves the current value UNCHANGED — for
+ * anything that is not a single valid hostname label (SEC-002).
+ */
+export function setSubdomain(subdomain: string): boolean {
+  const s = normalizeSubdomain(subdomain);
+  if (s == null) return false;
+  currentSubdomain = s;
+  return true;
+}
+
+/** Forget the org (bad persisted value) — the next login runs the lookup again. */
+export function clearSubdomain() {
+  currentSubdomain = '';
 }
 
 export function getSubdomain(): string {
   return currentSubdomain;
 }
 
+/**
+ * Pure composition of an org origin for a given label — the same rule getApiHost
+ * applies to the CURRENT org. Used to finish an offline sign-out against the org it
+ * was requested on even after the device has moved to another org (SEC-015).
+ * Callers must pass a label that already passed normalizeSubdomain.
+ */
+export function composeApiHost(label: string): string {
+  return `${scheme}://${label}.${baseDomain}`;
+}
+
 /** The org's API origin. Empty until an org has been resolved — callers must check. */
 export function getApiHost(): string {
-  return currentSubdomain ? `${scheme}://${currentSubdomain}.${baseDomain}` : '';
+  return currentSubdomain ? composeApiHost(currentSubdomain) : '';
 }
 
 /**
@@ -104,6 +140,17 @@ export function getHostLabel(): string {
  */
 export function resolveMediaUrl(url: string | null | undefined): string | null {
   if (!url) return null;
-  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  if (url.startsWith('http://') || url.startsWith('https://')) return normalizeMediaScheme(url, insecure);
   return `${getApiHost()}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
+/**
+ * Absolute media URLs are only allowed in the clear when the build itself talks
+ * plain http (dev). An https build upgrades `http://` to `https://` so a payload
+ * (or a wide ATS exception) can never make AVPlayer/Image/downloadAsync fetch in
+ * the clear (SEC-006). Pure, so the rule is unit-testable for both build modes.
+ */
+export function normalizeMediaScheme(url: string, allowInsecure: boolean): string {
+  if (!allowInsecure && url.startsWith('http://')) return `https://${url.slice('http://'.length)}`;
+  return url;
 }
