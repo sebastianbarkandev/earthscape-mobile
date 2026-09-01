@@ -159,3 +159,83 @@ describe('GoLiveScreen', () => {
     for (const b of buttons) expect(typeof b.props.accessibilityRole === 'string' || typeof b.props.accessibilityLabel === 'string').toBe(true);
   });
 });
+
+/**
+ * UI-036: the bottom-right control used to toggle `controlsOpen`, whose only consumer (the
+ * settings block) is gated on `!isLive` — so while live, and on the ended/error screens, the
+ * press changed nothing but its own icon. The settings themselves must NOT appear mid-stream
+ * (every field there is a creation-time parameter), so while live the same slot owns the stats.
+ */
+describe('settings/stats toggle by phase', () => {
+  const stats = { videoBitrateKbps: 1234, sendRateKbps: 1180, rttMs: 42, lost: 0, dropped: 0, sendBufferMs: 120, congestion: 0.1, elapsedSec: 61 };
+  const portrait = () => {
+    mockWindow = { width: 393, height: 852, scale: 3, fontScale: 1 };
+    mockInsets = { top: 59, bottom: 34, left: 0, right: 0 };
+  };
+  /** The corner control is a `Ctl` — match the labelled Pressable that carries the handler. */
+  const ctl = (r: ReactTestRenderer, label: string) =>
+    r.root.findAll((n) => n.props.accessibilityLabel === label && typeof n.props.onPress === 'function');
+  const tap = async (r: ReactTestRenderer, label: string) => {
+    const [target] = ctl(r, label);
+    expect(target).toBeDefined();
+    await act(async () => { target.props.onPress(); });
+  };
+
+  beforeEach(() => { mockBroadcast = idle; });
+
+  it('live: the corner control shows and hides the stats block', async () => {
+    portrait();
+    mockBroadcast = { ...idle, phase: 'live', publisher: 'publishing', stats: stats as never };
+    const r = await render();
+    expect(r.root.findAll(host('golive-stats'))).toHaveLength(1);
+    expect(r.root.findAll(host('golive-congestion'))).toHaveLength(1);
+
+    await tap(r, 'Hide stream statistics');
+    expect(r.root.findAll(host('golive-stats'))).toHaveLength(0);
+    expect(r.root.findAll(host('golive-congestion'))).toHaveLength(0);
+
+    await tap(r, 'Show stream statistics');
+    expect(r.root.findAll(host('golive-stats'))).toHaveLength(1);
+    expect(r.root.findAll(host('golive-congestion'))).toHaveLength(1);
+    await act(async () => { r.unmount(); });
+  });
+
+  it('live: tapping the stats row itself collapses it', async () => {
+    portrait();
+    mockBroadcast = { ...idle, phase: 'live', publisher: 'publishing', stats: stats as never };
+    const r = await render();
+    expect(r.root.find(host('golive-stats')).props.accessibilityHint).toBe('Hides the stream statistics');
+    // `host()` is the rendered View; the press handler lives on the Pressable above it.
+    const [row] = r.root.findAll((n) => n.props.testID === 'golive-stats' && typeof n.props.onPress === 'function');
+    expect(row).toBeDefined();
+    await act(async () => { row.props.onPress(); });
+    expect(r.root.findAll(host('golive-stats'))).toHaveLength(0);
+    expect(ctl(r, 'Show stream statistics').length).toBeGreaterThan(0);
+    await act(async () => { r.unmount(); });
+  });
+
+  it.each([
+    ['ended', { phase: 'ended' } as Partial<BroadcastState>],
+    ['error', { phase: 'error', error: 'x' } as Partial<BroadcastState>],
+  ])('%s: no dead settings/statistics toggle is rendered', async (_name, patch) => {
+    portrait();
+    mockBroadcast = { ...idle, ...patch } as BroadcastState;
+    const r = await render();
+    const dead = r.root.findAll((n) => typeof n.props.accessibilityLabel === 'string' && /settings|statistics/i.test(n.props.accessibilityLabel));
+    expect(dead).toHaveLength(0);
+    await act(async () => { r.unmount(); });
+  });
+
+  it('before going live the same control still shows and hides the settings', async () => {
+    portrait();
+    const r = await render();
+    expect(r.root.findAllByType(TextInput)).toHaveLength(1);
+
+    await tap(r, 'Hide settings');
+    expect(r.root.findAllByType(TextInput)).toHaveLength(0);
+
+    await tap(r, 'Show settings');
+    expect(r.root.findAllByType(TextInput)).toHaveLength(1);
+    await act(async () => { r.unmount(); });
+  });
+});

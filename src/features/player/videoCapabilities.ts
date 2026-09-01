@@ -31,6 +31,14 @@ export interface VideoCapabilities {
   canClip: boolean; // signed-in user (web ButtonBar no-ops when config.current_user is null)
   canCreateTags: boolean;
   canDeleteTags: boolean;
+  /**
+   * Web parity (PlaybackControls.jsx / ControlPanel.jsx / PlaybackControlProgressBar.jsx all
+   * special-case `status === 'live'` here): `Video.has_audio` is derived from the ffprobe of
+   * the FINISHED recording (`video.info`, backend models/video.py), which does not exist
+   * while a stream is live — so a live program sending perfectly good AAC reports
+   * `has_audio: false` and the volume control would be hidden for the whole broadcast.
+   * An explicit `audio_enabled: false` (the uploader turned audio off) still wins.
+   */
   hasAudio: boolean;
   showTranscript: boolean; // has_audio && audio_enabled !== false
 }
@@ -58,7 +66,7 @@ export function videoCapabilities(
     canClip: signedIn,
     canCreateTags: !!permissions?.tags?.create && (features?.tags_enabled ?? true),
     canDeleteTags: !!permissions?.tags?.delete,
-    hasAudio: !!video?.has_audio,
+    hasAudio: (!!video?.has_audio || isLive) && video?.audio_enabled !== false,
     showTranscript: !!video?.has_audio && video?.audio_enabled !== false,
   };
 }

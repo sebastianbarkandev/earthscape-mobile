@@ -158,13 +158,16 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
       ? { label: 'Stopped', color: theme.textOnAccent, bg: theme.danger }
       : { label: 'Ended', color: theme.textOnAccent, bg: theme.overlayBg };
     if (phase === 'error') return { label: 'Error', color: theme.textOnAccent, bg: theme.danger };
+    // 'ready' + a server stream still 'starting' = waiting (up to 20s) for the live server to
+    // claim the stream; a bare "Ready" pill would misreport that window.
+    if (phase === 'ready' && broadcast.stream?.status === 'starting') return { label: 'Waiting for live server…', color: theme.textOnAccent, bg: theme.overlayBg };
     switch (publisher) {
       case 'connecting': return { label: 'Connecting…', color: theme.textOnAccent, bg: theme.accentActive };
       case 'reconnecting': return { label: `Reconnecting${broadcast.reconnectAttempt ? ` (${broadcast.reconnectAttempt})` : ''}…`, color: theme.textOnAccent, bg: theme.warning };
       case 'publishing': return { label: `LIVE ${formatTime(broadcast.stats?.elapsedSec ?? 0, false)}`, color: theme.textOnAccent, bg: theme.liveRed };
       default: return { label: eventId ? 'Ready to join' : 'Ready', color: theme.textOnAccent, bg: theme.overlayBg };
     }
-  }, [phase, publisher, broadcast.reconnectAttempt, broadcast.stats?.elapsedSec, broadcast.error, broadcast.fatalReason, eventId]);
+  }, [phase, publisher, broadcast.reconnectAttempt, broadcast.stats?.elapsedSec, broadcast.error, broadcast.fatalReason, broadcast.stream?.status, eventId]);
 
   if (!supported) {
     return (
@@ -295,14 +298,14 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
           room actually left above the keyboard and below the top bar — without the cap the
           settings pushed the camera-name field off the top of a landscape screen. */}
       <View testID="golive-bottom" style={[styles.bottom, bottomBarInset(keyboardHeight, insets.bottom), sideInsets, { maxHeight: bottomBlockMaxHeight({ height, keyboardHeight, insetsTop: insets.top }) }]}>
-        {isLive && stats && (
+        {isLive && stats && controlsOpen && (
           <Pressable
             testID="golive-stats"
             onPress={() => setControlsOpen((v) => !v)}
             style={styles.statsRow}
             accessibilityRole="button"
             accessibilityLabel={`Stream statistics: sending ${Math.round(stats.sendRateKbps)} kilobits per second, round trip ${Math.round(stats.rttMs)} milliseconds`}
-            accessibilityHint="Toggles the settings"
+            accessibilityHint="Hides the stream statistics"
           >
             <Stat label="Bitrate" value={`${stats.videoBitrateKbps} kbps`} />
             <Stat label="Sending" value={`${Math.round(stats.sendRateKbps)} kbps`} />
@@ -312,8 +315,8 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
             <Stat label="GPS" value={broadcast.telemetry.enabled ? `${broadcast.telemetry.sent}` : 'off'} />
           </Pressable>
         )}
-        {isLive && stats && (
-          <View style={styles.congestionTrack}>
+        {isLive && stats && controlsOpen && (
+          <View testID="golive-congestion" style={styles.congestionTrack}>
             <View style={[styles.congestionFill, { width: `${Math.round(Math.min(1, stats.congestion) * 100)}%`, backgroundColor: stats.congestion > 0.6 ? theme.danger : stats.congestion > 0.3 ? theme.accent : theme.success }]} />
           </View>
         )}
@@ -325,7 +328,7 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
         {s && !s.playlist_ready && isLive && publisher === 'publishing' && (
           <Text style={styles.hint}>Connected · waiting for the server to publish the first segment…</Text>
         )}
-        {s?.playlist_ready && isLive && <Text style={styles.hintOk}>Viewers can watch now.</Text>}
+        {s?.playlist_ready && isLive && publisher === 'publishing' && <Text style={styles.hintOk}>Viewers can watch now.</Text>}
 
         {!isLive && phase !== 'ended' && phase !== 'error' && controlsOpen && (
           // RESP-026: the ONLY shrinkable region of the block — the controls row and the
@@ -395,7 +398,20 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
             </Pressable>
           )}
           <Ctl icon={muted ? 'microphone-slash' : 'microphone'} label={muted ? 'Unmute microphone' : 'Mute microphone'} onPress={toggleMute} active={muted} />
-          <Ctl icon={controlsOpen ? 'chevron-down' : 'sliders'} label={controlsOpen ? 'Hide settings' : 'Show settings'} onPress={() => setControlsOpen((v) => !v)} />
+          {/* UI-036: the 5th slot follows the phase — before start it shows/hides the settings block,
+              while live it shows/hides the stats; the ended/error screens have nothing to toggle, so
+              a 44pt spacer keeps the row's `space-between` geometry instead of a dead control. */}
+          {phase === 'ended' || phase === 'error' ? (
+            <View style={{ width: 44 }} />
+          ) : (
+            <Ctl
+              icon={controlsOpen ? 'chevron-down' : isLive ? 'chart-simple' : 'sliders'}
+              label={isLive
+                ? (controlsOpen ? 'Hide stream statistics' : 'Show stream statistics')
+                : (controlsOpen ? 'Hide settings' : 'Show settings')}
+              onPress={() => setControlsOpen((v) => !v)}
+            />
+          )}
         </View>
       </View>
     </View>

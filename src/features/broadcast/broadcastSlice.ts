@@ -195,7 +195,10 @@ const broadcastSlice = createSlice({
       // stream: the next Go Live would then open on a stale one and take the orphan-end branch
       // (REG-007). Same for an answer about a stream we are no longer on.
       if (!s.stream || s.stream.id !== payload.id) return;
-      s.stream = { ...s.stream, ...payload, ingest: s.stream.ingest ?? payload.ingest };
+      // `playlist_ready` is sticky: it means "the playlist has been servable", so a transient
+      // server-side cache flush (or an EFS read that momentarily finds nothing) can't flip the
+      // UI back to "waiting for the first segment" while viewers are watching.
+      s.stream = { ...s.stream, ...payload, ingest: s.stream.ingest ?? payload.ingest, playlist_ready: s.stream.playlist_ready || payload.playlist_ready };
       if (payload.status === 'ended' && s.phase !== 'ended') s.phase = 'ended';
       // Our /end landed (or the server ended it) while a retry was pending.
       else if (payload.status === 'ending' && s.phase === 'ending') s.phase = 'ended';

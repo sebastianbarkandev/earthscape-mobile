@@ -49,6 +49,15 @@ describe('broadcastSlice lifecycle', () => {
     s = reducer(s, refreshBroadcast.fulfilled({ ...stream, status: 'ended' }, 'r', undefined));
     expect(s.phase).toBe('ended');
   });
+
+  it('playlist_ready never regresses: a transient server-side cache flush cannot un-ready the stream', () => {
+    let s = reducer(init(), createBroadcast.fulfilled(stream, 'r', {}));
+    expect(s.stream?.playlist_ready).toBe(false);
+    s = reducer(s, refreshBroadcast.fulfilled({ ...stream, status: 'started', playlist_ready: true }, 'r', undefined));
+    expect(s.stream?.playlist_ready).toBe(true);
+    s = reducer(s, refreshBroadcast.fulfilled({ ...stream, status: 'started', playlist_ready: false }, 'r', undefined));
+    expect(s.stream?.playlist_ready).toBe(true);
+  });
 });
 
 // ── multi-phone robustness (LIVE-005 / LIVE-009 / LIVE-015) ──
