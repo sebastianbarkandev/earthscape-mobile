@@ -98,4 +98,10 @@ export const theme = {
   flightPath: '#FB8333',
   targetPath: '#1565C0',
   footprintFill: 'rgba(251,131,51,0.18)',
+
+  // Dashboard coverage-map recency legend (web dashboard/components/MapCard.jsx RECENCY)
+  coverageToday: '#D32F2F',
+  coverageThisWeek: '#FB8333',
+  coverageLastWeek: '#1565C0',
+  coverageOlder: '#2E7D32',
 } as const;

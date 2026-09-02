@@ -33,9 +33,10 @@ public class EarthscapeLiveModule: Module {
 
         Constants([
             "isSupported": true,
+            "isVoiceSupported": true,
         ])
 
-        Events("onStateChange", "onStats", "onError", "onNetworkPath")
+        Events("onStateChange", "onStats", "onError", "onNetworkPath", "onVoiceState", "onVoiceTranscript")
 
         OnCreate {
             Task { @MainActor in
@@ -110,6 +111,22 @@ public class EarthscapeLiveModule: Module {
 
         AsyncFunction("getStats") { () async -> [String: Any]? in
             await LivePublisher.shared.currentStats()
+        }
+
+        AsyncFunction("getSpeechPermission") { () -> String in
+            LivePublisher.speechPermissionStatus()
+        }
+
+        AsyncFunction("requestSpeechPermission") { () async -> String in
+            await LivePublisher.requestSpeechPermission()
+        }
+
+        AsyncFunction("setVoiceListening") { (on: Bool, contextualStrings: [String]?) async in
+            await LivePublisher.shared.setVoiceListening(on, contextualStrings: contextualStrings ?? [])
+        }
+
+        Function("haptic") { (kind: String) in
+            LivePublisher.haptic(kind)
         }
 
         View(EarthscapeLivePreviewView.self) {

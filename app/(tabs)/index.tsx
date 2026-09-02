@@ -1,6 +1,7 @@
 import React from 'react';
-import { LibraryScreen } from '@/features/library/LibraryScreen';
+import { DashboardScreen } from '@/features/dashboard/DashboardScreen';
 
-export default function LibraryRoute() {
-  return <LibraryScreen />;
+/** Landing tab — the web dashboard (flight stats, live, coverage map, recent uploads). */
+export default function DashboardRoute() {
+  return <DashboardScreen />;
 }

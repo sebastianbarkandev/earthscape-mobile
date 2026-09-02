@@ -33,6 +33,7 @@
         "NSPhotoLibraryUsageDescription": "Earthscape saves screenshots and downloaded videos to your photo library.",
         "NSCameraUsageDescription": "Earthscape uses the camera to stream live video from your phone.",
         "NSMicrophoneUsageDescription": "Earthscape uses the microphone to stream live audio from your phone.",
+        "NSSpeechRecognitionUsageDescription": "Earthscape recognizes spoken commands (on this device) to place marks and clips while you stream live.",
         "NSLocationWhenInUseUsageDescription": "Earthscape attaches your position to live streams so viewers can see where the video is from."
       }
     },

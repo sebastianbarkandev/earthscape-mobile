@@ -1,11 +1,74 @@
 import { createAsyncThunk, createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { createMobileStream, endMobileStream, getMobileStream, type CreateStreamBody, type MobileStream } from './api';
-import type { NetworkPathEvent, PublisherState, PublisherStats } from '../../../modules/earthscape-live';
+import type { NetworkPathEvent, PublisherState, PublisherStats, SpeechPermission, VoiceListenState, VoiceStateEvent } from '../../../modules/earthscape-live';
 import { redactSecrets } from './redact';
 import { ApiError } from '@/common/api/client';
+import { deleteClipmarkApi, postClipmark, postClipmarkUpdate, type VoiceClipmarkJson } from '@/features/player/api';
+import { DEFAULT_REACTION_OFFSET_SEC, MIN_VOICE_CLIP_SEC } from './voice/voiceTiming';
 
 /** /end retries before giving up (the live server's 15-min no-data expiry then closes the stream). */
 export const END_MAX_ATTEMPTS = 6;
+
+/**
+ * Voice commands while streaming (features/broadcast/voice). `mode` is what the phone DOES
+ * with what it hears: `standby` only reacts to the wake phrase, `active` runs the command
+ * grammar; `listen` mirrors the native recognizer (whether anything is heard at all).
+ */
+export type VoiceMode = 'off' | 'standby' | 'active';
+
+export interface VoiceMark {
+  id: number;
+  type: 'timepoint' | 'clip';
+  time_start: number;
+  time_end: number | null;
+  text: string;
+}
+
+export interface VoiceFeedback {
+  text: string;
+  tone: 'ok' | 'warn' | 'err';
+  at: number; // ms epoch, for the HUD's fade
+}
+
+export interface VoiceState {
+  mode: VoiceMode;
+  listen: VoiceListenState;
+  listenReason: string | null;
+  onDevice: boolean;
+  permission: SpeechPermission | null;
+  /** Arm standby (wake phrase) automatically once live. Survives resetBroadcast. */
+  wakeEnabled: boolean;
+  /** Seconds subtracted from the utterance start: the moment worth marking was BEFORE the user spoke. */
+  reactionOffsetSec: number;
+  transcript: string;
+  transcriptFinal: boolean;
+  feedback: VoiceFeedback | null;
+  /** Unix seconds of a spoken "clip in" awaiting its "clip out". */
+  openClipStart: number | null;
+  /** Marks created by voice during this broadcast, newest last. */
+  marks: VoiceMark[];
+  /** Clipmark requests in flight. */
+  busy: number;
+  /** ms epoch of the last accepted utterance — the idle timeout drops `active` back to `standby`. */
+  lastActivityAt: number | null;
+}
+
+const initialVoice: VoiceState = {
+  mode: 'off',
+  listen: 'off',
+  listenReason: null,
+  onDevice: false,
+  permission: null,
+  wakeEnabled: true,
+  reactionOffsetSec: DEFAULT_REACTION_OFFSET_SEC,
+  transcript: '',
+  transcriptFinal: false,
+  feedback: null,
+  openClipStart: null,
+  marks: [],
+  busy: 0,
+  lastActivityAt: null,
+};
 
 /**
  * One phone-originated live stream ("broadcast"). Phases:
@@ -47,6 +110,7 @@ export interface BroadcastState {
   lastEvent: string | null;
   /** Failed `POST /end` attempts of the current stream (retried by useBroadcast while phase === 'ending'). */
   endAttempts: number;
+  voice: VoiceState;
 }
 
 const initialState: BroadcastState = {
@@ -65,6 +129,7 @@ const initialState: BroadcastState = {
   fatalReason: null,
   lastEvent: null,
   endAttempts: 0,
+  voice: initialVoice,
 };
 
 /** Human message for a failed call: the server's reason (`{error}` on a 409 join, Flask-Security `{response:{errors}}`) over "HTTP 409". */
@@ -116,11 +181,170 @@ export const endBroadcast = createAsyncThunk<string, void, { state: { broadcast:
   },
 );
 
+// ── Voice-created clipmarks: the same endpoints the timeline card uses, on the phone's own video ──
+
+type VoiceThunkApi = { state: { broadcast: BroadcastState }; rejectValue: string };
+
+/** The phone's video + event, or the reason there is none (no stream yet / already ended). */
+function voiceTarget(state: BroadcastState): { videoId: number; eventId: number } | string {
+  const s = state.stream;
+  if (!s || state.phase !== 'live') return 'Not streaming';
+  if (typeof s.video_id !== 'number' || typeof s.event_id !== 'number') return 'Stream has no video yet';
+  return { videoId: s.video_id, eventId: s.event_id };
+}
+
+const voiceMarkText = (n: number, type: VoiceMark['type']) => `Voice ${type === 'clip' ? 'clip' : 'mark'} ${n}`;
+
+/** What was heard, for the record (the backend whitelists this exact `stream`). */
+export interface VoiceProvenance {
+  transcript: string;
+  confidence?: number;
+}
+const voiceJson = (command: string, p: VoiceProvenance | undefined, offsetSec: number): VoiceClipmarkJson => ({
+  stream: 'VOICE',
+  data: { kind: 'voice', command, transcript: (p?.transcript ?? '').slice(0, 500), confidence: p?.confidence, offset_sec: offsetSec },
+});
+
+export const voiceAddMark = createAsyncThunk<VoiceMark, { atUnix: number; provenance?: VoiceProvenance }, VoiceThunkApi>(
+  'broadcast/voice/mark',
+  async ({ atUnix, provenance }, { getState, rejectWithValue }) => {
+    const target = voiceTarget(getState().broadcast);
+    if (typeof target === 'string') return rejectWithValue(target);
+    const { voice } = getState().broadcast;
+    const n = voice.marks.length + 1;
+    try {
+      const cm = await postClipmark(target.videoId, {
+        event_id: target.eventId,
+        time_start: atUnix,
+        time_end: null,
+        type: 'timepoint',
+        text: voiceMarkText(n, 'timepoint'),
+        the_json: voiceJson('mark', provenance, voice.reactionOffsetSec),
+      });
+      return { id: cm.id, type: 'timepoint', time_start: cm.time_start ?? atUnix, time_end: null, text: cm.text ?? voiceMarkText(n, 'timepoint') };
+    } catch (e) {
+      return rejectWithValue(msg(e));
+    }
+  },
+);
+
+export const voiceClipOut = createAsyncThunk<VoiceMark, { atUnix: number; provenance?: VoiceProvenance }, VoiceThunkApi>(
+  'broadcast/voice/clipOut',
+  async ({ atUnix, provenance }, { getState, rejectWithValue }) => {
+    const { voice } = getState().broadcast;
+    const target = voiceTarget(getState().broadcast);
+    if (typeof target === 'string') return rejectWithValue(target);
+    const start = voice.openClipStart;
+    if (start == null) return rejectWithValue('No clip is open — say "clip in" first');
+    if (atUnix - start < MIN_VOICE_CLIP_SEC) return rejectWithValue(`Clip too short (under ${MIN_VOICE_CLIP_SEC}s)`);
+    const n = voice.marks.length + 1;
+    try {
+      const cm = await postClipmark(target.videoId, {
+        event_id: target.eventId,
+        time_start: start,
+        time_end: atUnix,
+        type: 'clip',
+        text: voiceMarkText(n, 'clip'),
+        the_json: voiceJson('clip', provenance, voice.reactionOffsetSec),
+      });
+      return { id: cm.id, type: 'clip', time_start: cm.time_start ?? start, time_end: cm.time_end ?? atUnix, text: cm.text ?? voiceMarkText(n, 'clip') };
+    } catch (e) {
+      return rejectWithValue(msg(e));
+    }
+  },
+);
+
+/** "Label …": renames the newest voice mark (the timeline shows `text`). */
+export const voiceLabelLast = createAsyncThunk<{ id: number; text: string }, { text: string }, VoiceThunkApi>(
+  'broadcast/voice/label',
+  async ({ text }, { getState, rejectWithValue }) => {
+    const target = voiceTarget(getState().broadcast);
+    if (typeof target === 'string') return rejectWithValue(target);
+    const last = getState().broadcast.voice.marks[getState().broadcast.voice.marks.length - 1];
+    if (!last) return rejectWithValue('Nothing to label yet');
+    const trimmed = text.trim().slice(0, 200);
+    if (!trimmed) return rejectWithValue('Say the label after "label"');
+    try {
+      await postClipmarkUpdate(target.videoId, last.id, { event_id: target.eventId, text: trimmed });
+      return { id: last.id, text: trimmed };
+    } catch (e) {
+      return rejectWithValue(msg(e));
+    }
+  },
+);
+
+/** "Undo": deletes the newest voice mark (only marks this session created — never someone else's). */
+export const voiceUndoLast = createAsyncThunk<{ id: number }, void, VoiceThunkApi>(
+  'broadcast/voice/undo',
+  async (_, { getState, rejectWithValue }) => {
+    const target = voiceTarget(getState().broadcast);
+    if (typeof target === 'string') return rejectWithValue(target);
+    const last = getState().broadcast.voice.marks[getState().broadcast.voice.marks.length - 1];
+    if (!last) return rejectWithValue('Nothing to undo');
+    try {
+      await deleteClipmarkApi(target.videoId, last.id);
+      return { id: last.id };
+    } catch (e) {
+      return rejectWithValue(msg(e));
+    }
+  },
+);
+
+const feedback = (text: string, tone: VoiceFeedback['tone']): VoiceFeedback => ({ text, tone, at: Date.now() });
+
 const broadcastSlice = createSlice({
   name: 'broadcast',
   initialState,
   reducers: {
-    resetBroadcast: () => initialState,
+    // Voice preferences (wake phrase, reaction offset) are the user's settings, not stream state.
+    resetBroadcast: (state) => ({
+      ...initialState,
+      voice: { ...initialVoice, wakeEnabled: state.voice.wakeEnabled, reactionOffsetSec: state.voice.reactionOffsetSec, permission: state.voice.permission },
+    }),
+    voiceSetMode(state, { payload }: PayloadAction<VoiceMode>) {
+      if (state.voice.mode === payload) return;
+      state.voice.mode = payload;
+      state.voice.lastActivityAt = payload === 'active' ? Date.now() : null;
+      state.voice.transcript = '';
+      state.voice.transcriptFinal = false;
+      if (payload === 'off') state.voice.feedback = null;
+      else if (payload === 'active') state.voice.feedback = feedback('Voice commands active', 'ok');
+      else state.voice.feedback = feedback('Say “activate voice commands”', 'ok');
+    },
+    voiceListenChanged(state, { payload }: PayloadAction<VoiceStateEvent>) {
+      state.voice.listen = payload.state;
+      state.voice.listenReason = payload.reason ?? null;
+      state.voice.onDevice = payload.onDevice;
+      // The native side stopped on its own (stopPreview / module destroyed): mirror it.
+      if (payload.state === 'off' && state.voice.mode !== 'off') state.voice.mode = 'off';
+    },
+    voicePermission(state, { payload }: PayloadAction<SpeechPermission>) {
+      state.voice.permission = payload;
+    },
+    voiceSetWakeEnabled(state, { payload }: PayloadAction<boolean>) {
+      state.voice.wakeEnabled = payload;
+    },
+    voiceSetReactionOffset(state, { payload }: PayloadAction<number>) {
+      state.voice.reactionOffsetSec = Math.max(0, Math.min(10, payload));
+    },
+    voiceTranscript(state, { payload }: PayloadAction<{ text: string; isFinal: boolean }>) {
+      state.voice.transcript = payload.text;
+      state.voice.transcriptFinal = payload.isFinal;
+    },
+    voiceFeedback(state, { payload }: PayloadAction<{ text: string; tone: VoiceFeedback['tone'] }>) {
+      state.voice.feedback = feedback(payload.text, payload.tone);
+    },
+    voiceTouch(state) {
+      state.voice.lastActivityAt = Date.now();
+    },
+    voiceClipIn(state, { payload }: PayloadAction<{ atUnix: number }>) {
+      state.voice.openClipStart = payload.atUnix;
+      state.voice.feedback = feedback('Clip started — say “clip out” to save it', 'ok');
+    },
+    voiceCancelClip(state) {
+      state.voice.feedback = feedback(state.voice.openClipStart == null ? 'No clip is open' : 'Clip cancelled', state.voice.openClipStart == null ? 'warn' : 'ok');
+      state.voice.openClipStart = null;
+    },
     publisherStateChanged(
       state,
       { payload }: PayloadAction<{ state: PublisherState; reason?: string; attempt?: number; nextRetryMs?: number }>,
@@ -188,6 +412,8 @@ const broadcastSlice = createSlice({
       s.startedAt = null;
       s.stats = null;
       s.endAttempts = 0;
+      s.voice.marks = [];
+      s.voice.openClipStart = null;
     });
     b.addCase(createBroadcast.fulfilled, (s, { payload }) => {
       s.stream = payload;
@@ -230,6 +456,46 @@ const broadcastSlice = createSlice({
       s.error = a.payload ?? 'Could not notify the server that the stream ended.';
       s.phase = s.endAttempts >= END_MAX_ATTEMPTS ? 'ended' : 'ending';
     });
+
+    // ── Voice marks ──
+    const voiceRejected = (fallback: string) => (s: BroadcastState, a: { payload?: string }) => {
+      s.voice.busy = Math.max(0, s.voice.busy - 1);
+      // Guard messages ("No clip is open") are warnings; transport/server failures are errors.
+      const text = a.payload ?? fallback;
+      s.voice.feedback = feedback(text, /failed|HTTP|network|timed out|Could not/i.test(text) ? 'err' : 'warn');
+    };
+    const voicePending = (s: BroadcastState) => { s.voice.busy += 1; };
+    b.addCase(voiceAddMark.pending, voicePending);
+    b.addCase(voiceAddMark.fulfilled, (s, { payload }) => {
+      s.voice.busy = Math.max(0, s.voice.busy - 1);
+      s.voice.marks.push(payload);
+      s.voice.feedback = feedback('Mark added', 'ok');
+    });
+    b.addCase(voiceAddMark.rejected, voiceRejected('Could not add the mark'));
+    b.addCase(voiceClipOut.pending, voicePending);
+    b.addCase(voiceClipOut.fulfilled, (s, { payload }) => {
+      s.voice.busy = Math.max(0, s.voice.busy - 1);
+      s.voice.marks.push(payload);
+      s.voice.openClipStart = null;
+      const len = payload.time_end != null ? Math.round(payload.time_end - payload.time_start) : 0;
+      s.voice.feedback = feedback(`Clip saved (${len}s)`, 'ok');
+    });
+    b.addCase(voiceClipOut.rejected, voiceRejected('Could not save the clip'));
+    b.addCase(voiceLabelLast.pending, voicePending);
+    b.addCase(voiceLabelLast.fulfilled, (s, { payload }) => {
+      s.voice.busy = Math.max(0, s.voice.busy - 1);
+      const m = s.voice.marks.find((x) => x.id === payload.id);
+      if (m) m.text = payload.text;
+      s.voice.feedback = feedback(`Labelled “${payload.text}”`, 'ok');
+    });
+    b.addCase(voiceLabelLast.rejected, voiceRejected('Could not label the mark'));
+    b.addCase(voiceUndoLast.pending, voicePending);
+    b.addCase(voiceUndoLast.fulfilled, (s, { payload }) => {
+      s.voice.busy = Math.max(0, s.voice.busy - 1);
+      s.voice.marks = s.voice.marks.filter((x) => x.id !== payload.id);
+      s.voice.feedback = feedback('Last mark deleted', 'ok');
+    });
+    b.addCase(voiceUndoLast.rejected, voiceRejected('Could not delete the mark'));
   },
 });
 
@@ -243,5 +509,15 @@ export const {
   telemetryProgress,
   setTelemetryEnabled,
   setBroadcastError,
+  voiceSetMode,
+  voiceListenChanged,
+  voicePermission,
+  voiceSetWakeEnabled,
+  voiceSetReactionOffset,
+  voiceTranscript,
+  voiceFeedback,
+  voiceTouch,
+  voiceClipIn,
+  voiceCancelClip,
 } = broadcastSlice.actions;
 export default broadcastSlice.reducer;

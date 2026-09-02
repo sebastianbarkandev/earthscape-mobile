@@ -19,6 +19,7 @@ const EDGE_CHROME = [
   'src/features/library/LibraryScreen.tsx',
   'src/features/library/LiveListScreen.tsx',
   'src/features/search/SearchScreen.tsx',
+  'src/features/dashboard/DashboardScreen.tsx',
 ];
 
 describe('edgePadding', () => {

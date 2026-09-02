@@ -37,7 +37,7 @@ export function AppHeader() {
   }, [params.q]);
 
   const submit = () => {
-    router.push({ pathname: '/(tabs)/search', params: q.trim() ? { q: q.trim() } : {} } as never);
+    router.push({ pathname: '/(tabs)/videos', params: q.trim() ? { q: q.trim() } : {} } as never);
   };
 
   const openAccount = () => {

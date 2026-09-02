@@ -11,7 +11,10 @@ import { formatTime } from '@/common/lib/formatTime';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { EarthscapeLive, EarthscapeLivePreviewView, PRESETS, type PermissionStatus, type VideoPreset } from '../../../modules/earthscape-live';
 import { useBroadcast } from './useBroadcast';
-import { END_MAX_ATTEMPTS, endBroadcast, setTelemetryEnabled } from './broadcastSlice';
+import { END_MAX_ATTEMPTS, endBroadcast, setTelemetryEnabled, voiceSetReactionOffset, voiceSetWakeEnabled } from './broadcastSlice';
+import { useVoiceCommands } from './voice/useVoiceCommands';
+import { VoiceHud } from './voice/VoiceHud';
+import { REACTION_OFFSET_CHOICES } from './voice/voiceTiming';
 import { defaultProgramLabel } from './programLabel';
 import { useJoinGate } from './useJoinGate';
 import { useHoldCaptureAudioFocus } from './audioFocus';
@@ -65,6 +68,8 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
   // i.e. BEFORE the preview claims the session, and released when the screen goes away.
   useHoldCaptureAudioFocus();
   const { broadcast, start, confirmStop, leave, retryTelemetry } = useBroadcast();
+  // Voice commands ("mark", "clip in/out", …) while live — the spoken twin of the timeline card.
+  const { voice, supported: voiceSupported, toggle: toggleVoice } = useVoiceCommands();
   const liveEnabled = useAppSelector((s) => s.auth.bootstrap?.features?.live_enabled ?? true);
   const user = useAppSelector((s) => s.auth.bootstrap?.current_user ?? null);
   const [perm, setPerm] = useState<PermissionStatus | null>(null);
@@ -400,8 +405,31 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
               <Icon name={broadcast.telemetry.enabled ? 'square-check' : 'square'} size={16} color={theme.overlayText} />
               <Text style={styles.toggleText}>{eventId ? 'Attach my GPS position (recorded with this camera; the event map keeps showing the primary track)' : 'Attach my GPS position (shows on the map like an aircraft track)'}</Text>
             </Pressable>
+            {voiceSupported && (
+              <>
+                <Pressable
+                  testID="golive-voice-wake"
+                  onPress={() => dispatch(voiceSetWakeEnabled(!voice.wakeEnabled))}
+                  style={styles.toggleRow}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: voice.wakeEnabled }}
+                  accessibilityLabel="Listen for the voice command wake phrase while live"
+                >
+                  <Icon name={voice.wakeEnabled ? 'square-check' : 'square'} size={16} color={theme.overlayText} />
+                  <Text style={styles.toggleText}>Listen for “activate voice commands” while live (speech stays on this device; the microphone button also turns voice on)</Text>
+                </Pressable>
+                <View style={styles.chips} testID="golive-voice-offset">
+                  {REACTION_OFFSET_CHOICES.map((sec) => (
+                    <Chip key={sec} label={sec ? `−${sec}s` : 'No offset'} on={voice.reactionOffsetSec === sec} onPress={() => dispatch(voiceSetReactionOffset(sec))} disabled={busy} />
+                  ))}
+                </View>
+                <Text style={styles.hint}>Voice marks are placed this long before you started speaking — what you saw happened before you said “mark”.</Text>
+              </>
+            )}
           </ScrollView>
         )}
+
+        {voiceSupported && voice.mode !== 'off' && <VoiceHud voice={voice} />}
 
         <View style={styles.controls}>
           <Ctl icon="camera-rotate" label="Switch camera" onPress={flip} disabled={busy} />
@@ -427,6 +455,17 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
             </Pressable>
           )}
           <Ctl icon={muted ? 'microphone-slash' : 'microphone'} label={muted ? 'Unmute microphone' : 'Mute microphone'} onPress={toggleMute} active={muted} />
+          {/* Voice commands: the button way in (straight to active); the wake phrase is the other.
+              Marks need the stream's video, so the button is dead until live. */}
+          {voiceSupported && phase !== 'ended' && phase !== 'error' && (
+            <Ctl
+              icon={voice.mode === 'active' ? 'microphone-lines' : 'ear-listen'}
+              label={voice.mode === 'off' ? 'Turn on voice commands' : 'Turn off voice commands'}
+              onPress={() => { toggleVoice().catch(() => undefined); }}
+              disabled={!isLive}
+              active={voice.mode === 'active'}
+            />
+          )}
           {/* UI-036: the 5th slot follows the phase — before start it shows/hides the settings block,
               while live it shows/hides the stats; the ended/error screens have nothing to toggle, so
               a 44pt spacer keeps the row's `space-between` geometry instead of a dead control. */}

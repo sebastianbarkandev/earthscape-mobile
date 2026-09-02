@@ -2,16 +2,19 @@ import { Platform } from 'react-native';
 import { EventEmitter, requireNativeModule, type EventSubscription } from 'expo-modules-core';
 import type {
   EarthscapeLiveEvents,
+  HapticKind,
   PermissionStatus,
   PreviewOptions,
   PublishOptions,
   PublisherState,
   PublisherStats,
+  SpeechPermission,
 } from './EarthscapeLive.types';
 
 /** Native surface (Swift). Only iOS is implemented; Android gets an honest stub below. */
 interface NativeEarthscapeLive {
   isSupported: boolean;
+  isVoiceSupported?: boolean;
   getState(): PublisherState;
   requestPermissions(): Promise<PermissionStatus>;
   getPermissions(): Promise<PermissionStatus>;
@@ -26,6 +29,10 @@ interface NativeEarthscapeLive {
   setMuted(muted: boolean): Promise<void>;
   setOrientation(orientation: 'landscape' | 'portrait' | 'auto'): Promise<void>;
   getStats(): Promise<PublisherStats | null>;
+  getSpeechPermission(): Promise<SpeechPermission>;
+  requestSpeechPermission(): Promise<SpeechPermission>;
+  setVoiceListening(on: boolean, contextualStrings: string[] | null): Promise<void>;
+  haptic(kind: HapticKind): void;
   addListener?(eventName: string): void;
   removeListeners?(count: number): void;
 }
@@ -65,6 +72,17 @@ export const EarthscapeLive = {
   setMuted: (muted: boolean) => (native ? native.setMuted(muted) : unsupported()),
   setOrientation: (o: 'landscape' | 'portrait' | 'auto') => (native ? native.setOrientation(o) : unsupported()),
   getStats: (): Promise<PublisherStats | null> => (native ? native.getStats() : Promise.resolve(null)),
+  /** On-device speech recognition for voice commands (iOS Speech framework). */
+  isVoiceSupported: !!native?.isVoiceSupported,
+  getSpeechPermission: (): Promise<SpeechPermission> =>
+    native?.isVoiceSupported ? native.getSpeechPermission() : Promise.resolve('denied'),
+  requestSpeechPermission: (): Promise<SpeechPermission> =>
+    native?.isVoiceSupported ? native.requestSpeechPermission() : Promise.resolve('denied'),
+  setVoiceListening: (on: boolean, contextualStrings: string[] = []) =>
+    native?.isVoiceSupported ? native.setVoiceListening(on, contextualStrings) : Promise.resolve(),
+  haptic: (kind: HapticKind) => {
+    if (native?.isVoiceSupported) native.haptic(kind);
+  },
 };
 
 const emitter = native ? new EventEmitter<EarthscapeLiveEvents>(native as never) : null;

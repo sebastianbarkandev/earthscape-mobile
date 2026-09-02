@@ -95,6 +95,10 @@ final class LivePublisher {
     private var observers: [NSObjectProtocol] = []
     private var parkedForBackground = false
 
+    /// Voice commands: a second audio output on the mixer (see VoiceCommandRecognizer).
+    private let voice = VoiceCommandRecognizer()
+    private var voiceAttached = false
+
     /// Hard cap on one connect attempt (handshake + publish). libsrt's own caller timeout
     /// (`conntimeo`, see `dialURL`) normally fires first; this is the backstop for the case
     /// seen on 2026-08-27 where `connect()` never returned and the UI sat in "Connecting…".
@@ -106,6 +110,9 @@ final class LivePublisher {
 
     private init() {
         installLifecycleObservers()
+        voice.eventSink = { [weak self] name, body in
+            Task { @MainActor in self?.eventSink?(name, body) }
+        }
     }
 
     // MARK: - Public surface used by the module
@@ -159,6 +166,7 @@ final class LivePublisher {
 
     func stopPreview() async {
         await stopPublish(reason: "preview stopped")
+        await setVoiceListening(false, contextualStrings: [])
         await mixer.stopRunning()
         try? await mixer.attachVideo(nil, track: 0)
         try? await mixer.attachAudio(nil, track: 0)
@@ -250,11 +258,61 @@ final class LivePublisher {
 
     func setMuted(_ muted: Bool) async throws {
         self.muted = muted
+        voice.setMicMuted(muted)
         guard mixerRunning else { return }
         if muted {
             try await mixer.attachAudio(nil, track: 0)
         } else {
             try await mixer.attachAudio(AVCaptureDevice.default(for: .audio), track: 0)
+        }
+    }
+
+    // MARK: - Voice commands
+
+    nonisolated static func speechPermissionStatus() -> String {
+        VoiceCommandRecognizer.authorizationName()
+    }
+
+    nonisolated static func requestSpeechPermission() async -> String {
+        await VoiceCommandRecognizer.requestAuthorization()
+    }
+
+    /// Arm/disarm the recognizer. Needs the camera session (the mic is attached to the mixer,
+    /// not to us) and speech authorization; the recognizer reports its own state via
+    /// `onVoiceState` and utterances via `onVoiceTranscript`.
+    func setVoiceListening(_ on: Bool, contextualStrings: [String]) async {
+        if on {
+            if !voiceAttached {
+                await mixer.addOutput(voice)
+                voiceAttached = true
+            }
+            voice.setMicMuted(muted)
+            voice.start(contextualStrings: contextualStrings)
+        } else {
+            voice.stop()
+            if voiceAttached {
+                await mixer.removeOutput(voice)
+                voiceAttached = false
+            }
+        }
+    }
+
+    nonisolated static func haptic(_ kind: String) {
+        DispatchQueue.main.async {
+            switch kind {
+            case "success":
+                let g = UINotificationFeedbackGenerator(); g.prepare(); g.notificationOccurred(.success)
+            case "warning":
+                let g = UINotificationFeedbackGenerator(); g.prepare(); g.notificationOccurred(.warning)
+            case "error":
+                let g = UINotificationFeedbackGenerator(); g.prepare(); g.notificationOccurred(.error)
+            case "heavy":
+                let g = UIImpactFeedbackGenerator(style: .heavy); g.prepare(); g.impactOccurred()
+            case "medium":
+                let g = UIImpactFeedbackGenerator(style: .medium); g.prepare(); g.impactOccurred()
+            default:
+                let g = UIImpactFeedbackGenerator(style: .light); g.prepare(); g.impactOccurred()
+            }
         }
     }
 

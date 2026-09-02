@@ -228,12 +228,22 @@ export function postMakePublic(
 
 // ── Clipmarks (web eventSlice addClipmark/updateClipmark/removeClipmark/clipClipmark/...) ──
 
+/**
+ * Client-written `the_json` — the backend whitelists exactly this shape (stream 'VOICE', dict
+ * data, ≤4 KB) and ignores anything else; older backends ignore the key entirely.
+ */
+export interface VoiceClipmarkJson {
+  stream: 'VOICE';
+  data: { kind: 'voice'; transcript: string; command: string; confidence?: number; offset_sec?: number };
+}
 export interface ClipmarkCreateBody {
   event_id: number;
   time_start: number;
   time_end: number | null; // key must be present (backend subscripts it)
   type: 'clip' | 'timepoint';
   text: string;
+  description?: string;
+  the_json?: VoiceClipmarkJson;
 }
 export function postClipmark(videoId: number, body: ClipmarkCreateBody) {
   return api<Clipmark>(`/api/v1/videos/${videoId}/clipmarks`, { method: 'POST', body });
@@ -241,7 +251,7 @@ export function postClipmark(videoId: number, body: ClipmarkCreateBody) {
 export function postClipmarkUpdate(
   videoId: number,
   clipmarkId: number,
-  body: { event_id: number; time_start?: number | null; time_end?: number | null; text?: string; description?: string; type?: string },
+  body: { event_id: number; time_start?: number | null; time_end?: number | null; text?: string; description?: string; type?: string; the_json?: VoiceClipmarkJson },
 ) {
   return api<Clipmark>(`/api/v1/videos/${videoId}/clipmarks/${clipmarkId}`, { method: 'POST', body });
 }

@@ -10,7 +10,7 @@ function TabIcon({ name, color }: { name: IconName; color: string }) {
   return <Icon name={name} size={18} color={color} />;
 }
 
-/** Footer tab bar is the primary navigation (Library · Search · Live); the header carries logo, search and account. */
+/** Footer tab bar is the primary navigation (Home · Videos · Live); the header carries logo, search and account. */
 export default function TabsLayout() {
   const status = useAppSelector((s) => s.auth.status);
   const bootstrap = useAppSelector((s) => s.auth.bootstrap);
@@ -33,11 +33,11 @@ export default function TabsLayout() {
     >
       <Tabs.Screen
         name="index"
-        options={{ title: 'Library', tabBarIcon: ({ color }) => <TabIcon name="table-cells-large" color={color} /> }}
+        options={{ title: 'Home', tabBarIcon: ({ color }) => <TabIcon name="house" color={color} /> }}
       />
       <Tabs.Screen
-        name="search"
-        options={{ title: 'Search', tabBarIcon: ({ color }) => <TabIcon name="magnifying-glass" color={color} /> }}
+        name="videos"
+        options={{ title: 'Videos', tabBarIcon: ({ color }) => <TabIcon name="video" color={color} /> }}
       />
       <Tabs.Screen
         name="live"

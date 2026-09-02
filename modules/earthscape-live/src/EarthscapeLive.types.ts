@@ -109,11 +109,51 @@ export interface PermissionStatus {
   microphone: 'granted' | 'denied' | 'undetermined';
 }
 
+export type SpeechPermission = 'granted' | 'denied' | 'undetermined';
+
+/**
+ * Native recognizer state (VoiceCommandRecognizer.swift). `paused_muted`: the mic device is
+ * detached while muted, so no audio reaches the recognizer; `error`: repeated recognizer
+ * failures — it keeps retrying on its own.
+ */
+export type VoiceListenState = 'off' | 'listening' | 'paused_muted' | 'unavailable' | 'error';
+
+export interface VoiceStateEvent {
+  state: VoiceListenState;
+  reason?: string;
+  onDevice: boolean;
+}
+
+export interface VoiceSegment {
+  text: string;
+  /** Wall clock (unix seconds) the word started, or null when the recognizer gave no offset. */
+  startUnix: number | null;
+  durationSec: number;
+  confidence: number;
+}
+
+/**
+ * One recognition request = one utterance (rotated ~1 s after the partial text stops changing).
+ * Partials repeat with growing `text`; exactly one `isFinal` closes each `requestId`.
+ */
+export interface VoiceTranscriptEvent {
+  requestId: number;
+  text: string;
+  isFinal: boolean;
+  onDevice: boolean;
+  requestStartUnix: number;
+  segments: VoiceSegment[];
+}
+
+export type HapticKind = 'light' | 'medium' | 'heavy' | 'success' | 'warning' | 'error';
+
 export type EarthscapeLiveEvents = {
   onStateChange(event: StateChangeEvent): void;
   onStats(event: PublisherStats): void;
   onError(event: PublisherErrorEvent): void;
   onNetworkPath(event: NetworkPathEvent): void;
+  onVoiceState(event: VoiceStateEvent): void;
+  onVoiceTranscript(event: VoiceTranscriptEvent): void;
 };
 
 /** Sensible defaults for a phone on cellular: 720p30, 2.5 Mbps start, 0.5–4 Mbps ABR window. */
