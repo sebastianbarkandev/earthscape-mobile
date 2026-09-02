@@ -40,7 +40,7 @@ import { useState } from 'react';
 import { effectiveLayout, videoCapabilities, type DashboardLayout } from './videoCapabilities';
 import { canAddCameraTo } from '@/features/broadcast/liveGates';
 import { toggleGraph } from './graphSlice';
-import { existingProgramLabels, programTrackLabel } from './programs';
+import { existingProgramLabels, programTrackLabel, wantsOwnTrack } from './programs';
 import { computeViewportSize } from './viewportLayout';
 import { PinnedHeader, StickyEnabledContext } from './components/PinnedHeader';
 import { useKeyboardHeight } from '@/common/hooks/useKeyboardHeight';
@@ -120,7 +120,8 @@ export function PlayerScreen({ eventId, videoIdHint, initialLayout, initialGraph
     dispatch(refreshEvent({ eventId }));
   }, [dispatch, eventId]);
   // flight_data 403 mid-transition (LIVESTREAMS vs VIDEOS READ quirk) -> refresh, backed off in the hook.
-  useFlightData(video?.id ?? null, refresh);
+  // A phone program's own GPS track + camera footprint live under its own id (?own=1).
+  useFlightData(video?.id ?? null, refresh, wantsOwnTrack(video));
 
   // liveStreamState flip (live ended / went live) -> refresh the event so the
   // source URL swaps (live playlist <-> VOD HLS). Same signal the web uses.

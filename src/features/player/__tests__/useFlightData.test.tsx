@@ -74,13 +74,13 @@ describe('useFlightData keyed by video (multi-program swaps)', () => {
     mockedGet.mockImplementation((id, after) => (after !== undefined ? Promise.resolve(emptyTail(after)) : id === primary.id ? d1.promise : d2.promise));
 
     render(primary.id);
-    expect(mockedGet).toHaveBeenCalledWith(primary.id, undefined);
+    expect(mockedGet).toHaveBeenCalledWith(primary.id, undefined, false);
 
     act(() => {
       store.dispatch(setActiveVideo(s2.id));
     });
     render(s2.id);
-    expect(mockedGet).toHaveBeenCalledWith(s2.id, undefined);
+    expect(mockedGet).toHaveBeenCalledWith(s2.id, undefined, false);
 
     // s2 answers first with its own 5 points.
     d2.resolve({ flight_data: flightData(T0 + 1000, 5) });
@@ -103,8 +103,8 @@ describe('useFlightData keyed by video (multi-program swaps)', () => {
     render(s1.id);
     await flush();
     // Initial fetch, then the loop asks for the tail once (server returns same last utc -> stops).
-    expect(mockedGet.mock.calls[0]).toEqual([s1.id, undefined]);
-    expect(mockedGet.mock.calls[1]).toEqual([s1.id, T0 + 4]);
+    expect(mockedGet.mock.calls[0]).toEqual([s1.id, undefined, false]);
+    expect(mockedGet.mock.calls[1]).toEqual([s1.id, T0 + 4, false]);
     const callsAfterInitial = mockedGet.mock.calls.length;
     await act(async () => {
       jest.advanceTimersByTime(7000);

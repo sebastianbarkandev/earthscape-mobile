@@ -22,6 +22,8 @@ import { bannerTop, bottomBarInset, bottomBlockMaxHeight } from './goLiveChrome'
 import { useKeyboardHeight } from '@/common/hooks/useKeyboardHeight';
 import { edgeOffset, edgePadding } from '@/common/layout';
 import { touchSlop, verticalTouchSlop } from '@/common/touchTarget';
+import { poseSource } from './pose/poseSource';
+import { AirLinkOverlay } from './airlink/AirLinkOverlay';
 
 interface Props {
   /** Join this live event as an additional program. */
@@ -38,6 +40,8 @@ const LATENCY = [
   { label: 'Fast · 200 ms', ms: 200, hint: 'Solid Wi-Fi only.' },
   { label: 'Robust · 800 ms', ms: 800, hint: 'Poor coverage, moving fast.' },
 ];
+/** Height of the "Adding your camera to" banner + gap, so the ground↔air card sits under it. */
+const AIRLINK_BELOW_BANNER = 40;
 
 /**
  * Phone-as-source. Camera preview + Go Live. Two modes: create a new live event,
@@ -161,10 +165,18 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
     router.back();
   }, [isLive, phase, confirmStop, router]);
 
+  // A streaming aircraft is nearby: become a program of ITS event instead of opening a new one.
+  // Same route with join params — this screen unmounts (preview stops, nothing to end yet) and
+  // the join gate (SEC-017) runs exactly as it does for "Add my camera".
+  const onJoinNearby = useCallback((id: number, title: string) => {
+    router.replace({ pathname: '/golive', params: { eventId: String(id), title } } as never);
+  }, [router]);
+
   const flip = async () => {
     try {
       const next = await EarthscapeLive.switchCamera();
       setCamera(next);
+      poseSource.setCamera(next); // the footprint follows the lens that publishes (front looks back at the user)
       if (next === 'front' && torch) setTorch(false);
     } catch { /* ignore */ }
   };
@@ -261,6 +273,18 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
           <Text style={styles.bannerText} numberOfLines={1}>Adding your camera to: {eventTitle ?? `event ${eventId}`}</Text>
         </View>
       ) : null}
+      {/* Ground <-> air: in-frame / bearing to the aircraft's target / teammates (join), or the
+          nearest streaming aircraft to join (new event). Sits under the banner, above the cards. */}
+      <AirLinkOverlay
+        eventId={eventId}
+        ownVideoId={s?.video_id ?? null}
+        telemetryEnabled={broadcast.telemetry.enabled}
+        visible={perm?.camera === 'granted' && !previewError && phase !== 'ended' && phase !== 'error'}
+        top={bannerTop(insets) + (eventId ? AIRLINK_BELOW_BANNER : 0)}
+        sideInsets={{ paddingLeft: sideInsets.paddingLeft, paddingRight: sideInsets.paddingRight }}
+        landscape={landscape}
+        onJoinNearby={!isLive && !busy ? onJoinNearby : undefined}
+      />
 
       {perm && perm.camera !== 'granted' && (
         <View style={[styles.centerCard, cardInsets]}>
@@ -403,7 +427,7 @@ export function GoLiveScreen({ eventId, eventTitle, programs }: Props) {
               accessibilityLabel="Attach my GPS position"
             >
               <Icon name={broadcast.telemetry.enabled ? 'square-check' : 'square'} size={16} color={theme.overlayText} />
-              <Text style={styles.toggleText}>{eventId ? 'Attach my GPS position (recorded with this camera; the event map keeps showing the primary track)' : 'Attach my GPS position (shows on the map like an aircraft track)'}</Text>
+              <Text style={styles.toggleText}>{eventId ? 'Attach my GPS position and camera direction (your footprint joins the event map)' : 'Attach my GPS position and camera direction (shows on the map like an aircraft, footprint included)'}</Text>
             </Pressable>
             {voiceSupported && (
               <>

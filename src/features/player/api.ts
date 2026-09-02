@@ -153,8 +153,12 @@ export interface FlightData {
   last_flight_point_utc: number | null;
 }
 
-export function getFlightData(videoId: number, after?: number) {
-  const q = after !== undefined ? `?after=${after}` : '';
+/** `own` = the requested video's own points (a phone program's GPS + camera footprint) instead of the event primary's. */
+export function getFlightData(videoId: number, after?: number, own = false) {
+  const params: string[] = [];
+  if (own) params.push('own=1');
+  if (after !== undefined) params.push(`after=${after}`);
+  const q = params.length ? `?${params.join('&')}` : '';
   return api<{ flight_data: FlightData }>(`/api/v1/videos/${videoId}/flight_data.json${q}`);
 }
 

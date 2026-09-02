@@ -1,4 +1,4 @@
-import { existingProgramLabels, MAX_TILE_PLAYERS, planProgramTiles, programTrackLabel } from '../programs';
+import { existingProgramLabels, isMobileProgram, MAX_TILE_PLAYERS, planProgramTiles, programTrackLabel, wantsOwnTrack } from '../programs';
 import { makeVideo, primary, s1, s2, s3, s4 } from './multiprogramFixtures';
 
 describe('planProgramTiles (ProgramStrip policy)', () => {
@@ -28,11 +28,30 @@ describe('planProgramTiles (ProgramStrip policy)', () => {
   });
 });
 
+describe('isMobileProgram / wantsOwnTrack', () => {
+  it('a phone program is one whose program_type starts with "mobile" (web parity)', () => {
+    expect(isMobileProgram(s1)).toBe(true);
+    expect(isMobileProgram(makeVideo({ id: 300, program_type: 'IR' }))).toBe(false);
+    expect(isMobileProgram(makeVideo({ id: 301, program_type: null }))).toBe(false);
+    expect(isMobileProgram(null)).toBe(false);
+  });
+
+  it('only a non-primary phone program fetches its own flight points', () => {
+    expect(wantsOwnTrack(s1)).toBe(true);
+    expect(wantsOwnTrack(primary)).toBe(false);
+    expect(wantsOwnTrack(makeVideo({ id: 300, program_type: 'IR' }))).toBe(false);
+    expect(wantsOwnTrack(makeVideo({ id: 302, program_type: 'Mobile', is_primary: true }))).toBe(false);
+    expect(wantsOwnTrack(null)).toBe(false);
+  });
+});
+
 describe('programTrackLabel (LIVE-003 mitigation)', () => {
-  it('is null for the primary and names the primary track when a phone program is active', () => {
+  it('is null for the primary and for a phone program (own track), names the primary for other secondaries', () => {
+    const ir = makeVideo({ id: 300, program_type: 'IR' });
     expect(programTrackLabel([primary, s1], primary.id)).toBeNull();
-    expect(programTrackLabel([primary, s1], s1.id)).toBe('Track: Flight 12 (primary)');
-    expect(programTrackLabel([s1], s1.id)).toBeNull();
+    expect(programTrackLabel([primary, s1], s1.id)).toBeNull();
+    expect(programTrackLabel([primary, ir], ir.id)).toBe('Track: Flight 12 (primary)');
+    expect(programTrackLabel([ir], ir.id)).toBeNull();
   });
 });
 

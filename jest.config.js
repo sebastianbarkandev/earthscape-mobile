@@ -6,6 +6,8 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/src/$1',
     // RTK resolves immer's 'react-native' export (legacy ESM) which Jest can't parse; use the CJS build.
     '^immer$': '<rootDir>/node_modules/immer/dist/cjs/index.js',
+    // react-redux's 'react-native' export is legacy ESM too; hook/component tests need the CJS build.
+    '^react-redux$': '<rootDir>/node_modules/react-redux/dist/cjs/index.js',
   },
   clearMocks: true,
 };

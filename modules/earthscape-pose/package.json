@@ -1,0 +1,8 @@
+{
+  "name": "earthscape-pose",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Earthscape camera pose: true-north heading, pitch, roll (CoreMotion) + the active camera's field of view (AVFoundation), so a phone's live video gets a footprint and target on the map. iOS only.",
+  "main": "index.ts",
+  "types": "index.ts"
+}

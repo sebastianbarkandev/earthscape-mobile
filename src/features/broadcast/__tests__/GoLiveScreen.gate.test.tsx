@@ -22,6 +22,7 @@ const mockStart = jest.fn(async (_opts?: { eventId?: number; title?: string }) =
 jest.mock('expo-secure-store', () => ({ getItemAsync: jest.fn(async () => null), setItemAsync: jest.fn(async () => undefined), deleteItemAsync: jest.fn(async () => undefined) }));
 jest.mock('@/common/media', () => ({}));
 jest.mock('@/common/components/Icon', () => ({ Icon: () => null }));
+jest.mock('../airlink/AirLinkOverlay', () => ({ AirLinkOverlay: () => null })); // polls the aircraft track; the renderers here are never unmounted
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: jest.fn() }) }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }) }));
 jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({ __esModule: true, default: () => ({ width: 393, height: 852, scale: 3, fontScale: 1 }) }));
