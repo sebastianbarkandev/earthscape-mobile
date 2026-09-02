@@ -29,8 +29,9 @@ export const FORBIDDEN_MAX_MS = 60000;
  * @param onForbidden CLAUDE.md quirk: flight_data checks LIVESTREAMS READ while live and VIDEOS READ
  * otherwise — a 403 mid-transition means "refresh the event", not a client bug. Called once per
  * run; subsequent 403s only back off (7s doubling, capped at 60s) while the video is live.
+ * @param own `?own=1`: the video's OWN points (a phone program) instead of the primary's (LIVE-003).
  */
-export function useFlightData(videoId: number | null, onForbidden?: () => void) {
+export function useFlightData(videoId: number | null, onForbidden?: () => void, own = false) {
   const dispatch = useAppDispatch();
   const isLive = useAppSelector((s) => s.player.isLive);
   const storeLastUtc = useAppSelector((s) => s.player.mapData.lastUtc);
@@ -64,7 +65,7 @@ export function useFlightData(videoId: number | null, onForbidden?: () => void) 
         // Bounded to avoid runaway loops on malformed data.
         for (let i = 0; i < 200; i++) {
           if (cancelled) return;
-          const res = await getFlightData(id, after);
+          const res = await getFlightData(id, after, own);
           if (cancelled) return; // swapped/unmounted while awaiting: never append under another id
           const fd = res?.flight_data;
           if (!fd || fd.last_flight_point_utc == null) break;
@@ -99,5 +100,5 @@ export function useFlightData(videoId: number | null, onForbidden?: () => void) 
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoId, isLive, dispatch]);
+  }, [videoId, isLive, own, dispatch]);
 }

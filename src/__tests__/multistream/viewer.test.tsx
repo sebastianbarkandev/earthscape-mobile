@@ -200,6 +200,7 @@ describe('scenario 2 — the viewer swaps to program C', () => {
     await renderViewer();
     const b = backend.joinProgram('Mobile · Ben');
     const c = backend.joinProgram('Mobile · Cy');
+    backend.pushPoints(c.id, 12); // C's phone has published 12 s of its own GPS track
     backend.joinProgram('Mobile · Dee');
     // C is watchable but read-only for this viewer (ACL orgs grant per uploader).
     backend.setPermissions(c.id, { update: false });
@@ -218,15 +219,17 @@ describe('scenario 2 — the viewer swaps to program C', () => {
     expect(st.primaryPermissions?.videos.update).toBe(true);
     // The map/graph series belonged to the previous program: dropped, then refetched for C from
     // scratch. The FIRST request for C carries no `?after=` — proof the store's lastUtc was reset
-    // rather than the new program's points being appended to the old program's track.
+    // rather than the new program's points being appended to the old program's track — and asks
+    // for C's OWN points (`?own=1`): a phone has a track of its own (LIVE-003 fix).
     const cFlight = backend.calls.filter((x) => x.route === `/api/v1/videos/${c.id}/flight_data.json`);
     expect(cFlight.length).toBeGreaterThanOrEqual(1);
     expect(cFlight[0].query.after).toBeUndefined();
-    expect(st.mapData.loc).toHaveLength(30); // refilled once, NOT 60 concatenated
+    expect(cFlight[0].query.own).toBe('1');
+    expect(st.mapData.loc).toHaveLength(12); // C's own 12 points, NOT the primary's 30 (nor 42 concatenated)
     expect(st.mapData.firstUtc).toBe(T0);
-    expect(store.getState().graph.data.KLV.Altitude).toHaveLength(30);
-    // LIVE-003: the backend serves the PRIMARY's points for any id, so the map says whose track it is.
-    expect(mockFlightMapProps[mockFlightMapProps.length - 1].trackLabel).toBe('Track: Flight 12 (primary)');
+    expect(store.getState().graph.data.KLV.Altitude).toHaveLength(12);
+    // The track IS the phone's own now, so no "this is the primary's track" caption.
+    expect(mockFlightMapProps[mockFlightMapProps.length - 1].trackLabel).toBeNull();
 
     // Heartbeat retargets: only C is reported from here on.
     backend.clearCalls();

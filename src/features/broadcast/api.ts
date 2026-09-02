@@ -72,6 +72,16 @@ export interface TelemetryFix {
   /** Seconds into the stream (optional; the server derives it from video.start when absent). */
   pts?: number;
   tail?: string;
+  /**
+   * Camera pose (all optional). With `heading` + `hfov` the server projects the frame onto
+   * the ground (app/utils/phone_pose.py) and the phone gets a footprint + target like an
+   * aircraft. Degrees; pitch + = up, roll + = right side down.
+   */
+  pitch?: number;
+  roll?: number;
+  hfov?: number;
+  vfov?: number;
+  camera_height_m?: number;
 }
 
 export function postTelemetry(id: number, fixes: TelemetryFix[]) {

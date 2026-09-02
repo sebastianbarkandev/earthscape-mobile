@@ -29,15 +29,15 @@ let store: ScenarioStore;
 let renderer: ReactTestRenderer | null = null;
 let onForbidden: jest.Mock;
 
-function Probe({ videoId }: { videoId: number | null }) {
-  useFlightData(videoId, onForbidden);
+function Probe({ videoId, own }: { videoId: number | null; own?: boolean }) {
+  useFlightData(videoId, onForbidden, own);
   return null;
 }
 
-const render = (videoId: number | null) => {
+const render = (videoId: number | null, opts: { own?: boolean } = {}) => {
   const el = (
     <Provider store={store}>
-      <Probe videoId={videoId} />
+      <Probe videoId={videoId} own={opts.own} />
     </Provider>
   );
   act(() => {
@@ -187,15 +187,29 @@ describe('scenario 6 — incremental flight data across programs', () => {
     expect(store.getState().player.mapData.loc).toHaveLength(5);
   });
 
-  it('the fetch target is the ACTIVE program even though the backend serves the primary track (LIVE-003)', async () => {
+  it('a phone program asks for its OWN track (?own=1) and gets its own points, not the primary\'s (LIVE-003)', async () => {
+    backend.pushPoints(PRIMARY_VIDEO_ID, 6);
+    const phone = backend.joinProgram('Mobile · Ben');
+    backend.pushPoints(phone.id, 3);
+    await loadRealEvent();
+    act(() => store.dispatch(setActiveVideo(phone.id)));
+    render(phone.id, { own: true });
+    await settle();
+    expect(requestedIds()[0]).toBe(phone.id);
+    const flight = backend.calls.filter((x) => x.route === `/api/v1/videos/${phone.id}/flight_data.json`);
+    expect(flight[0].query.own).toBe('1');
+    expect(store.getState().player.mapData.loc).toHaveLength(3);
+  });
+
+  it('a non-mobile secondary rides the primary track (no ?own=1)', async () => {
     backend.pushPoints(PRIMARY_VIDEO_ID, 6);
     const phone = backend.joinProgram('Mobile · Ben');
     await loadRealEvent();
     act(() => store.dispatch(setActiveVideo(phone.id)));
     render(phone.id);
     await settle();
-    expect(requestedIds()[0]).toBe(phone.id);
-    // The points that come back are the primary's — the mobile mitigation is the map's caption.
+    const flight = backend.calls.filter((x) => x.route === `/api/v1/videos/${phone.id}/flight_data.json`);
+    expect(flight[0].query.own).toBeUndefined();
     expect(store.getState().player.mapData.loc).toHaveLength(6);
     expect(store.getState().player.mapData.firstUtc).toBe(T0);
   });

@@ -140,6 +140,7 @@ export class FakeBackend {
   videos: EventVideo[] = [];
   private permissions = new Map<number, PermissionSpec>();
   private points = new Map<number, FlightSeries>();
+  private sensors = new Map<number, { target: [number, number]; footprint: [number, number][] }>();
   private streams = new Map<number, FakeStream>();
   private failures = new Map<string, { times: number; status: number; body: unknown }>();
   private pending = new Map<string, Array<(v: unknown) => void>>();
@@ -151,9 +152,9 @@ export class FakeBackend {
   /** Points per flight_data response (`get_flight_points(5000, after)`); lowered to force ?after= paging. */
   pageSize = 5000;
   /**
-   * false = today's backend (LIVE-003: the PRIMARY's points are served for every video id of the
-   * event). true = one track per video, i.e. the behaviour the additive `?own=1` fix will bring —
-   * the only way to make cross-program series contamination observable at all.
+   * false = the backend's default (LIVE-003: the PRIMARY's points are served for every video id
+   * of the event unless the request carries `?own=1`). true = one track per video for EVERY
+   * request, own or not — the only way to make cross-program series contamination observable.
    */
   serveRequestedVideoPoints = false;
   /** The live server claims a new stream on its next poll: GET /streams/{id} flips starting → started. */
@@ -242,6 +243,12 @@ export class FakeBackend {
     const start = fromUtc ?? (series.length ? series[series.length - 1][0] + 1 : T0);
     for (let i = 0; i < count; i++) series.push([start + i, [39.5 + (start + i - T0) * 0.001, -104.9 - (start + i - T0) * 0.001]]);
     this.points.set(videoId, series);
+  }
+
+  /** Sensor metadata served with every point of a video (MISB frame centre + corner ring). */
+  setSensor(videoId: number, sensor: { target: [number, number]; footprint: [number, number][] } | null): void {
+    if (sensor) this.sensors.set(videoId, sensor);
+    else this.sensors.delete(videoId);
   }
 
   /** Make the next `times` calls of a route fail (route = "METHOD /path", no query). */
@@ -338,18 +345,21 @@ export class FakeBackend {
       const requested = Number(m[1]);
       if (!this.videos.some((v) => v.id === requested)) throw new ApiError(404, { description: 'Video not found' });
       if (this.flightForbidden) throw new ApiError(403, { error: 'Forbidden' });
-      // LIVE-003: whatever id is asked for, the endpoint resolves the event's PRIMARY.
+      // LIVE-003: whatever id is asked for, the endpoint resolves the event's PRIMARY — unless
+      // `?own=1` asks for the requested video's own points (the additive backend fix).
       const primary = this.videos.find((v) => v.is_primary);
-      const owner = this.serveRequestedVideoPoints ? this.video(requested) : primary;
+      const own = query.own === '1' || this.serveRequestedVideoPoints;
+      const owner = own ? this.video(requested) : primary;
       const series = (owner && this.points.get(owner.id)) ?? [];
       if (series.length === 0) return []; // get_flight_points_cached returns [] with no points at all
       const after = query.after !== undefined ? Number(query.after) : (owner?.start ?? T0) - 1;
       const tail = series.filter(([utc]) => utc > after).slice(0, this.pageSize);
+      const sensor = owner ? this.sensors.get(owner.id) : undefined;
       return {
         flight_data: {
           loc: tail,
-          target: [],
-          footprint: [],
+          target: sensor ? tail.map(([utc]) => [utc, sensor.target]) : [],
+          footprint: sensor ? tail.map(([utc]) => [utc, sensor.footprint]) : [],
           acft_hdg: tail.map(([utc]) => [utc, 90] as [number, number]),
           graphs: { KLV: { Altitude: tail.map(([utc], i) => [utc, 1000 + i] as [number, number]) } },
           first_flight_point_utc: tail.length ? tail[0][0] : null,
@@ -365,6 +375,32 @@ export class FakeBackend {
       return { liveStreamState: v.live_stream_state, loggedIn: true };
     }
 
+    if (method === 'GET' && route === '/api/v1/live/list') {
+      // live_api: primaries only (`viewable_live_videos` filters is_primary), raw LiveStream.status,
+      // `event_id` on the earthscape-mobile branch, fixed per_page 24.
+      const items = this.videos
+        .filter((v) => v.is_primary && v.live_stream_state === 'live')
+        .map((v) => {
+          const s = [...this.streams.values()].find((x) => x.videoId === v.id);
+          return {
+            id: v.id,
+            title: v.title,
+            status: v.status,
+            duration: v.duration,
+            uploaded_filesize: null,
+            date_posted: null,
+            start: v.start != null ? new Date(v.start * 1000).toISOString() : null,
+            thumbnail_url: v.thumbnail_url,
+            deleted_at: null,
+            tail: v.tail ?? null,
+            event_id: v.event_id ?? EVENT_ID,
+            live_stream_id: v.live_stream_id ?? null,
+            live_stream_status: s?.status ?? null,
+            user: null,
+          };
+        });
+      return { items, total: items.length, page: 1, per_page: 24, pages: 1 };
+    }
     if (method === 'POST' && route === '/api/v1/live/streams') {
       return this.createStream(body as Record<string, unknown>);
     }

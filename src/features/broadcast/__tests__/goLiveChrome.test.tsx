@@ -22,6 +22,7 @@ let mockKeyboard = 0;
 jest.mock('expo-secure-store', () => ({ getItemAsync: jest.fn(async () => null), setItemAsync: jest.fn(async () => undefined), deleteItemAsync: jest.fn(async () => undefined) }));
 jest.mock('@/common/media', () => ({}));
 jest.mock('@/common/components/Icon', () => ({ Icon: () => null }));
+jest.mock('../airlink/AirLinkOverlay', () => ({ AirLinkOverlay: () => null })); // polls the aircraft track; the renderers here are never unmounted
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: jest.fn() }) }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => mockInsets }));
 jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({ __esModule: true, default: () => mockWindow }));

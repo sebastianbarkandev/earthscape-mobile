@@ -25,6 +25,18 @@ export const isLiveProgram = (v: Pick<EventVideo, 'live_stream_state'>) => v.liv
 /** Tile caption: the program label, falling back to the title. */
 export const programLabel = (v: Pick<EventVideo, 'program_type' | 'title'>) => v.program_type || v.title;
 
+/** A phone that joined via "Add my camera" (web eventSlice.isMobileProgram: program_type starts with "mobile"). */
+export const isMobileProgram = (v: Pick<EventVideo, 'program_type'> | null | undefined) =>
+  /^\s*mobile/i.test(v?.program_type || '');
+
+/**
+ * Whether flight_data.json should be asked for the video's OWN points (`?own=1`). Only a phone
+ * program has a track of its own (GPS + camera pose -> footprint/target); every other secondary
+ * (a second sensor on the aircraft) is meant to ride the primary's track, which is the default.
+ */
+export const wantsOwnTrack = (v: Pick<EventVideo, 'program_type' | 'is_primary'> | null | undefined) =>
+  !!v && !v.is_primary && isMobileProgram(v);
+
 /**
  * Which secondaries to show and how. Live programs first (they are what a viewer
  * of a live event cares about), then VOD; the first `maxPlayers` decode, the rest
@@ -58,11 +70,12 @@ export function planProgramTiles(videos: EventVideo[], activeId: number | null, 
  * LIVE-003 mitigation: the backend's flight_data.json serves the PRIMARY video's
  * track whatever video id is requested, so when a secondary program is active the
  * map is honestly labelled as the primary's track instead of implying it is the
- * phone's own GPS. Returns null when the active video is the primary (or unknown).
+ * phone's own GPS. Returns null when the active video is the primary (or unknown),
+ * and for a phone program, whose own track is fetched with `?own=1` (wantsOwnTrack).
  */
 export function programTrackLabel(videos: EventVideo[], activeId: number | null): string | null {
   const active = videos.find((v) => v.id === activeId);
-  if (!active || active.is_primary) return null;
+  if (!active || active.is_primary || wantsOwnTrack(active)) return null;
   const primary = videos.find((v) => v.is_primary);
   if (!primary) return null;
   return `Track: ${programLabel(primary)} (primary)`;

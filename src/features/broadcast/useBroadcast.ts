@@ -18,6 +18,7 @@ import {
   telemetryProgress,
 } from './broadcastSlice';
 import { TelemetryQueue, fixFromLocation } from './telemetry';
+import { poseSource, withPose } from './pose/poseSource';
 import { endStreamWithRetry } from './endRetry';
 import { LISTENER_POLL_MS, LISTENER_WAIT_MS, waitForStreamStarted } from './waitForStarted';
 
@@ -148,6 +149,7 @@ export function useBroadcast() {
     telemetryToken.current += 1;
     locationSub.current?.remove();
     locationSub.current = null;
+    poseSource.stop().catch(() => undefined);
     if (flushTimer.current) clearInterval(flushTimer.current);
     flushTimer.current = null;
   }, []);
@@ -184,10 +186,15 @@ export function useBroadcast() {
         return perm.canAskAgain === false ? 'blocked' : 'denied';
       }
       const q = queue.current;
+      // Camera pose rides along on each fix (heading/pitch/roll/FOV -> footprint + target on
+      // every viewer's map). Best effort: without a sensor the fix goes out as plain GPS.
+      poseSource.start().catch(() => undefined);
       const sub = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 0 },
         (loc) => {
-          if (q.push(fixFromLocation(loc))) dispatch(telemetryProgress({ pending: q.pending, lastFixAt: Date.now() }));
+          if (q.push(withPose(fixFromLocation(loc), poseSource.status))) {
+            dispatch(telemetryProgress({ pending: q.pending, lastFixAt: Date.now() }));
+          }
         },
       );
       // The stream can end (or the screen close) while `watchPositionAsync` is resolving: the
