@@ -60,11 +60,23 @@ export function VoiceHud({ voice }: { voice: VoiceState }) {
           {COMMAND_HELP.map((h) => (
             <Text key={h.say} style={styles.helpLine}><Text style={styles.helpSay}>{h.say}</Text> {h.does}</Text>
           ))}
+          {voice.history.length > 0 && (
+            <View style={styles.history} testID="golive-voice-history">
+              {voice.history.map((h) => (
+                <Text key={h.at + h.text} style={[styles.helpLine, h.tone === 'ok' ? styles.ok : h.tone === 'warn' ? styles.warn : styles.err]} numberOfLines={1}>
+                  {timeOfDay(h.at)}  {h.text}
+                </Text>
+              ))}
+            </View>
+          )}
         </View>
       )}
     </Pressable>
   );
 }
+
+/** HH:MM:SS for the history lines. */
+const timeOfDay = (ms: number) => new Date(ms).toTimeString().slice(0, 8);
 
 function describe(voice: VoiceState): { text: string; icon: string; color: string } {
   if (voice.listen === 'paused_muted') return { text: 'Voice paused — microphone muted', icon: 'microphone-slash', color: theme.warningText };
@@ -91,4 +103,5 @@ const styles = StyleSheet.create({
   help: { gap: 2, paddingTop: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.overlayHairline },
   helpLine: { color: theme.overlayTextMuted, fontSize: 11, lineHeight: 15 },
   helpSay: { color: theme.overlayText, fontWeight: '600' },
+  history: { gap: 1, marginTop: 4, paddingTop: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.overlayHairline },
 });

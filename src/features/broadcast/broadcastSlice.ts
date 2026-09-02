@@ -51,6 +51,8 @@ export interface VoiceState {
   busy: number;
   /** ms epoch of the last accepted utterance — the idle timeout drops `active` back to `standby`. */
   lastActivityAt: number | null;
+  /** Every feedback line of this broadcast, newest first (capped) — the HUD's help panel shows it, so "it did nothing" has a record. */
+  history: VoiceFeedback[];
 }
 
 const initialVoice: VoiceState = {
@@ -68,6 +70,7 @@ const initialVoice: VoiceState = {
   marks: [],
   busy: 0,
   lastActivityAt: null,
+  history: [],
 };
 
 /**
@@ -290,7 +293,14 @@ export const voiceUndoLast = createAsyncThunk<{ id: number }, void, VoiceThunkAp
   },
 );
 
-const feedback = (text: string, tone: VoiceFeedback['tone']): VoiceFeedback => ({ text, tone, at: Date.now() });
+export const VOICE_HISTORY_MAX = 12;
+/** Show a feedback line and keep it in the history. */
+const say = (voice: VoiceState, text: string, tone: VoiceFeedback['tone']) => {
+  const f: VoiceFeedback = { text, tone, at: Date.now() };
+  voice.feedback = f;
+  voice.history.unshift(f);
+  if (voice.history.length > VOICE_HISTORY_MAX) voice.history.length = VOICE_HISTORY_MAX;
+};
 
 const broadcastSlice = createSlice({
   name: 'broadcast',
@@ -308,8 +318,8 @@ const broadcastSlice = createSlice({
       state.voice.transcript = '';
       state.voice.transcriptFinal = false;
       if (payload === 'off') state.voice.feedback = null;
-      else if (payload === 'active') state.voice.feedback = feedback('Voice commands active', 'ok');
-      else state.voice.feedback = feedback('Say “activate voice commands”', 'ok');
+      else if (payload === 'active') say(state.voice, 'Voice commands active', 'ok');
+      else say(state.voice, 'Say “activate voice commands”', 'ok');
     },
     voiceListenChanged(state, { payload }: PayloadAction<VoiceStateEvent>) {
       state.voice.listen = payload.state;
@@ -332,17 +342,17 @@ const broadcastSlice = createSlice({
       state.voice.transcriptFinal = payload.isFinal;
     },
     voiceFeedback(state, { payload }: PayloadAction<{ text: string; tone: VoiceFeedback['tone'] }>) {
-      state.voice.feedback = feedback(payload.text, payload.tone);
+      say(state.voice, payload.text, payload.tone);
     },
     voiceTouch(state) {
       state.voice.lastActivityAt = Date.now();
     },
     voiceClipIn(state, { payload }: PayloadAction<{ atUnix: number }>) {
       state.voice.openClipStart = payload.atUnix;
-      state.voice.feedback = feedback('Clip started — say “clip out” to save it', 'ok');
+      say(state.voice, 'Clip started — say “clip out” to save it', 'ok');
     },
     voiceCancelClip(state) {
-      state.voice.feedback = feedback(state.voice.openClipStart == null ? 'No clip is open' : 'Clip cancelled', state.voice.openClipStart == null ? 'warn' : 'ok');
+      say(state.voice, state.voice.openClipStart == null ? 'No clip is open' : 'Clip cancelled', state.voice.openClipStart == null ? 'warn' : 'ok');
       state.voice.openClipStart = null;
     },
     publisherStateChanged(
@@ -414,6 +424,7 @@ const broadcastSlice = createSlice({
       s.endAttempts = 0;
       s.voice.marks = [];
       s.voice.openClipStart = null;
+      s.voice.history = [];
     });
     b.addCase(createBroadcast.fulfilled, (s, { payload }) => {
       s.stream = payload;
@@ -462,14 +473,14 @@ const broadcastSlice = createSlice({
       s.voice.busy = Math.max(0, s.voice.busy - 1);
       // Guard messages ("No clip is open") are warnings; transport/server failures are errors.
       const text = a.payload ?? fallback;
-      s.voice.feedback = feedback(text, /failed|HTTP|network|timed out|Could not/i.test(text) ? 'err' : 'warn');
+      say(s.voice, text, /failed|HTTP|network|timed out|Could not/i.test(text) ? 'err' : 'warn');
     };
     const voicePending = (s: BroadcastState) => { s.voice.busy += 1; };
     b.addCase(voiceAddMark.pending, voicePending);
     b.addCase(voiceAddMark.fulfilled, (s, { payload }) => {
       s.voice.busy = Math.max(0, s.voice.busy - 1);
       s.voice.marks.push(payload);
-      s.voice.feedback = feedback('Mark added', 'ok');
+      say(s.voice, 'Mark added', 'ok');
     });
     b.addCase(voiceAddMark.rejected, voiceRejected('Could not add the mark'));
     b.addCase(voiceClipOut.pending, voicePending);
@@ -478,7 +489,7 @@ const broadcastSlice = createSlice({
       s.voice.marks.push(payload);
       s.voice.openClipStart = null;
       const len = payload.time_end != null ? Math.round(payload.time_end - payload.time_start) : 0;
-      s.voice.feedback = feedback(`Clip saved (${len}s)`, 'ok');
+      say(s.voice, `Clip saved (${len}s)`, 'ok');
     });
     b.addCase(voiceClipOut.rejected, voiceRejected('Could not save the clip'));
     b.addCase(voiceLabelLast.pending, voicePending);
@@ -486,14 +497,14 @@ const broadcastSlice = createSlice({
       s.voice.busy = Math.max(0, s.voice.busy - 1);
       const m = s.voice.marks.find((x) => x.id === payload.id);
       if (m) m.text = payload.text;
-      s.voice.feedback = feedback(`Labelled “${payload.text}”`, 'ok');
+      say(s.voice, `Labelled “${payload.text}”`, 'ok');
     });
     b.addCase(voiceLabelLast.rejected, voiceRejected('Could not label the mark'));
     b.addCase(voiceUndoLast.pending, voicePending);
     b.addCase(voiceUndoLast.fulfilled, (s, { payload }) => {
       s.voice.busy = Math.max(0, s.voice.busy - 1);
       s.voice.marks = s.voice.marks.filter((x) => x.id !== payload.id);
-      s.voice.feedback = feedback('Last mark deleted', 'ok');
+      say(s.voice, 'Last mark deleted', 'ok');
     });
     b.addCase(voiceUndoLast.rejected, voiceRejected('Could not delete the mark'));
   },

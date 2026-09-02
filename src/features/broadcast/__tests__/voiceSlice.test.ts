@@ -12,12 +12,14 @@ import reducer, {
   voiceCancelClip,
   voiceClipIn,
   voiceClipOut,
+  voiceFeedback,
   voiceLabelLast,
   voiceListenChanged,
   voiceSetMode,
   voiceSetReactionOffset,
   voiceSetWakeEnabled,
   voiceUndoLast,
+  VOICE_HISTORY_MAX,
   type BroadcastState,
 } from '../broadcastSlice';
 import type { MobileStream } from '../api';
@@ -119,9 +121,25 @@ describe('voice reducers', () => {
   it('a new stream starts with no voice marks', () => {
     let s = reducer(init(), voiceClipIn({ atUnix: T0 }));
     s = { ...s, voice: { ...s.voice, marks: [{ id: 1, type: 'timepoint', time_start: T0, time_end: null, text: 'x' }] } };
+    expect(s.voice.history.map((h) => h.text)).toEqual(['Clip started — say “clip out” to save it']);
     s = reducer(s, createBroadcast.pending('r', {}));
     expect(s.voice.marks).toEqual([]);
     expect(s.voice.openClipStart).toBeNull();
+    expect(s.voice.history).toEqual([]);
+  });
+
+  it('every feedback line is kept in the history, newest first, capped', () => {
+    let s = reducer(init(), voiceSetMode('active'));
+    s = reducer(s, voiceFeedback({ text: 'Didn\'t catch that: “marc”', tone: 'warn' }));
+    s = reducer(s, voiceCancelClip());
+    expect(s.voice.history.map((h) => h.text)).toEqual(['No clip is open', 'Didn\'t catch that: “marc”', 'Voice commands active']);
+    for (let i = 0; i < VOICE_HISTORY_MAX + 5; i++) s = reducer(s, voiceFeedback({ text: `line ${i}`, tone: 'ok' }));
+    expect(s.voice.history).toHaveLength(VOICE_HISTORY_MAX);
+    expect(s.voice.history[0].text).toBe(`line ${VOICE_HISTORY_MAX + 4}`);
+    // Turning voice off clears the live line but not the record.
+    s = reducer(s, voiceSetMode('off'));
+    expect(s.voice.feedback).toBeNull();
+    expect(s.voice.history).toHaveLength(VOICE_HISTORY_MAX);
   });
 });
 

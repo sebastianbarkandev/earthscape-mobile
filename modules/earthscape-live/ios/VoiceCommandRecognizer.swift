@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import HaishinKit
 import Speech
+import os
 
 /// Speech recognition for voice commands while publishing, fed from the `MediaMixer`
 /// audio fan-out — the SAME PCM the encoder gets. There is no second capture graph and
@@ -40,6 +41,7 @@ final class VoiceCommandRecognizer: NSObject, @unchecked Sendable {
     private var onDevice = false
     private var contextualStrings: [String] = []
     private var lastPartial = ""
+    private var lastPartialSegments: [SFTranscriptionSegment] = []
     private var consecutiveErrors = 0
     private var lastErrorReason: String?
     private var lastStateSent: [String: Any] = [:]
@@ -48,10 +50,26 @@ final class VoiceCommandRecognizer: NSObject, @unchecked Sendable {
     private var rotationTimer: DispatchWorkItem?
     private var restartTimer: DispatchWorkItem?
 
+    /// A rotated-out request whose final has not arrived yet: its last stable partial, promoted
+    /// to the final if the request errors out instead (1110 "no speech" is routine for a short
+    /// word after `endAudio()`) or never finalizes. Without this a heard-and-shown "mark" is
+    /// silently dropped while a four-word phrase sails through.
+    private struct PendingFinal {
+        let text: String
+        let segments: [SFTranscriptionSegment]
+        let start: Date
+        let fallback: DispatchWorkItem
+    }
+    private var pendingFinals: [Int: PendingFinal] = [:]
+
+    private static let log = Logger(subsystem: "earthscape.live", category: "voice")
+
     /// Silence after the last partial change before the utterance is finalized.
     private static let utteranceGap: TimeInterval = 1.0
     /// Hard cap per request (server recognition stops at 60 s; on-device is not immune to stalls).
     private static let requestCap: TimeInterval = 45
+    /// How long a rotated-out request may take to deliver its final before the partial stands in.
+    private static let finalGrace: TimeInterval = 1.5
 
     override init() {
         callbackQueue.underlyingQueue = queue
@@ -114,6 +132,9 @@ final class VoiceCommandRecognizer: NSObject, @unchecked Sendable {
             self.converter = nil
             self.converterInput = nil
             self.lastPartial = ""
+            self.lastPartialSegments = []
+            self.pendingFinals.values.forEach { $0.fallback.cancel() }
+            self.pendingFinals = [:]
             self.emitState()
         }
     }
@@ -135,6 +156,7 @@ final class VoiceCommandRecognizer: NSObject, @unchecked Sendable {
         requestId += 1
         requestStart = Date()
         lastPartial = ""
+        lastPartialSegments = []
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         req.taskHint = .search
@@ -159,8 +181,25 @@ final class VoiceCommandRecognizer: NSObject, @unchecked Sendable {
     private func rotate(reason: String) {
         guard running else { return }
         let old = request
+        let oldId = requestId
+        let oldStart = requestStart
+        let partial = lastPartial
+        let partialSegments = lastPartialSegments
         beginRequest()
         old?.endAudio()
+        Self.log.info("rotate #\(oldId) (\(reason)) partial=\"\(partial, privacy: .public)\"")
+        guard !partial.isEmpty else { return }
+        let fallback = DispatchWorkItem { [weak self] in self?.promotePartial(requestId: oldId, why: "no final") }
+        pendingFinals[oldId] = PendingFinal(text: partial, segments: partialSegments, start: oldStart, fallback: fallback)
+        queue.asyncAfter(deadline: .now() + Self.finalGrace, execute: fallback)
+    }
+
+    /// The rotated-out request is not going to finalize: its last partial is what was heard.
+    private func promotePartial(requestId id: Int, why: String) {
+        guard running, let pending = pendingFinals.removeValue(forKey: id) else { return }
+        pending.fallback.cancel()
+        Self.log.notice("final #\(id) promoted from partial (\(why, privacy: .public)): \"\(pending.text, privacy: .public)\"")
+        emitTranscript(requestId: id, start: pending.start, text: pending.text, segments: pending.segments, isFinal: true)
     }
 
     private func handle(requestId id: Int, start: Date, result: SFSpeechRecognitionResult?, error: Error?) {
@@ -178,16 +217,27 @@ final class VoiceCommandRecognizer: NSObject, @unchecked Sendable {
                     lastPartial = text
                     scheduleUtteranceEnd()
                 }
+                if !text.isEmpty { lastPartialSegments = result.bestTranscription.segments }
+            }
+            if result.isFinal {
+                if let pending = pendingFinals.removeValue(forKey: id) { pending.fallback.cancel() }
+                Self.log.info("final #\(id): \"\(text, privacy: .public)\"")
             }
             if !text.isEmpty || result.isFinal {
-                emitTranscript(requestId: id, start: start, result: result)
+                emitTranscript(requestId: id, start: start, text: text, segments: result.bestTranscription.segments, isFinal: result.isFinal)
             }
             return
         }
         if let error {
-            // Old requests fail routinely on endAudio() with nothing to say (1110 "no speech").
-            guard isCurrent else { return }
             let ns = error as NSError
+            // Old requests fail routinely on endAudio() with nothing to say (1110 "no speech") —
+            // but one that DID produce a partial is a heard utterance: promote it.
+            guard isCurrent else {
+                Self.log.info("request #\(id) ended with error \(ns.domain, privacy: .public)/\(ns.code)")
+                promotePartial(requestId: id, why: "error \(ns.code)")
+                return
+            }
+            Self.log.error("current request #\(id) failed: \(ns.domain, privacy: .public)/\(ns.code) \(ns.localizedDescription, privacy: .public)")
             if ns.domain == "kAFAssistantErrorDomain" && (ns.code == 209 || ns.code == 216) { return } // cancelled by us
             consecutiveErrors += 1
             let backoff = min(5.0, 0.5 * pow(2.0, Double(consecutiveErrors - 1)))
@@ -264,8 +314,8 @@ final class VoiceCommandRecognizer: NSObject, @unchecked Sendable {
 
     // MARK: - Events
 
-    private func emitTranscript(requestId id: Int, start: Date, result: SFSpeechRecognitionResult) {
-        let segments: [[String: Any]] = result.bestTranscription.segments.map { seg in
+    private func emitTranscript(requestId id: Int, start: Date, text: String, segments: [SFTranscriptionSegment], isFinal: Bool) {
+        let segments: [[String: Any]] = segments.map { seg in
             var d: [String: Any] = [
                 "text": seg.substring,
                 "durationSec": seg.duration,
@@ -281,8 +331,8 @@ final class VoiceCommandRecognizer: NSObject, @unchecked Sendable {
         }
         send("onVoiceTranscript", [
             "requestId": id,
-            "text": result.bestTranscription.formattedString,
-            "isFinal": result.isFinal,
+            "text": text,
+            "isFinal": isFinal,
             "onDevice": onDevice,
             "requestStartUnix": start.timeIntervalSince1970,
             "segments": segments,

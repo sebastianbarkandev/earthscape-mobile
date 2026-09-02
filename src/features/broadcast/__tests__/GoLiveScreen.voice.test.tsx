@@ -8,7 +8,7 @@ import React from 'react';
 import { Provider } from 'react-redux';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { GoLiveScreen } from '../GoLiveScreen';
-import broadcastReducer, { createBroadcast, publisherStateChanged, voiceClipIn, voiceSetMode, type BroadcastState } from '../broadcastSlice';
+import broadcastReducer, { createBroadcast, publisherStateChanged, voiceClipIn, voiceFeedback, voiceSetMode, type BroadcastState } from '../broadcastSlice';
 import { makeStore, type TestStore } from '@/features/player/__tests__/fixtures';
 import { EarthscapeLive } from '../../../../modules/earthscape-live';
 import type { MobileStream } from '../api';
@@ -151,6 +151,23 @@ describe('voice commands on the Go Live screen', () => {
     const [hud] = r.root.findAll((n: ReactTestInstance) => typeof n.type !== 'string' && n.props.testID === 'golive-voice-hud' && typeof n.props.onPress === 'function');
     await act(async () => { hud.props.onPress(); });
     expect(texts(r).some((x) => x.includes('adds a timepoint'))).toBe(true);
+    await act(async () => { r.unmount(); });
+  });
+
+  it('the help panel lists what voice did (and failed to do) this broadcast, newest first', async () => {
+    const store = makeStore();
+    live(store);
+    const { r } = await render(store);
+    await act(async () => {
+      store.dispatch(voiceSetMode('active'));
+      store.dispatch(voiceFeedback({ text: 'Request failed (HTTP 403)', tone: 'err' }));
+    });
+    expect(hostNode(r, 'golive-voice-history')).toHaveLength(0);
+    const [hud] = r.root.findAll((n: ReactTestInstance) => typeof n.type !== 'string' && n.props.testID === 'golive-voice-hud' && typeof n.props.onPress === 'function');
+    await act(async () => { hud.props.onPress(); });
+    expect(hostNode(r, 'golive-voice-history')).toHaveLength(1);
+    const lines = texts(r).filter((x) => /^\d\d:\d\d:\d\d {2}/.test(x));
+    expect(lines.map((x) => x.replace(/^\d\d:\d\d:\d\d {2}/, ''))).toEqual(['Request failed (HTTP 403)', 'Voice commands active', 'Say “activate voice commands”']);
     await act(async () => { r.unmount(); });
   });
 });
